@@ -11,7 +11,7 @@ import os
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V18.1 | Data Extractor + Stake", layout="wide")
+st.set_page_config(page_title="Quant Pro V18.2 | Data Extractor + Stake", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -19,12 +19,12 @@ BANKROLL_INICIAL = 1000.0
 APUESTA_MINIMA_EUROS = 0.20
 ITEMS_POR_PAGINA = 10
 
-# EXPANSIÓN MUNDIAL: 60+ Ligas Domésticas
+# EXPANSIÓN MUNDIAL: 60+ Ligas Domésticas + Regionalligas Alemanas
 PAISES_LIGAS = {
     "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
     "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
     "Italia": {"Serie A": 135, "Serie B": 136, "Serie C": 137},
-    "Alemania": {"1. Bundesliga": 78, "2. Bundesliga": 79, "3. Liga": 80},
+    "Alemania": {"1. Bundesliga": 78, "2. Bundesliga": 79, "3. Liga": 80, "Reg. Nord": 81, "Reg. Nordost": 82, "Reg. West": 83, "Reg. Südwest": 84, "Reg. Bayern": 85},
     "Francia": {"Ligue 1": 61, "Ligue 2": 62, "National": 63},
     "Paises Bajos": {"Eredivisie": 88, "Eerste Divisie": 89},
     "Portugal": {"Primeira Liga": 94, "Liga Portugal 2": 95},
