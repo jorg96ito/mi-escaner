@@ -11,7 +11,7 @@ import os
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V18.2 | Data Extractor + Stake", layout="wide")
+st.set_page_config(page_title="Quant Pro V18.3 | The Holy Grail Filter", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -311,12 +311,18 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
     st.title("🤖 Escáner Cuantitativo & Extractor Data")
     
     dias = {"Hoy": 0, "Mañana": 1, "Pasado": 2}
-    c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.3, 1])
+    c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
     dia_sel = c_dia.selectbox("Día", list(dias.keys()))
     max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 2, 20, 10)
     
     def reset_pagina(): st.session_state.pagina_actual = 1
-    criterio_orden = c_orden.selectbox("Escanear por:", ["💰 Importe (EV+)", "📊 Probabilidad (%)"], on_change=reset_pagina)
+    
+    # 🏆 TERCERA OPCIÓN AÑADIDA: EL SANTO GRIAL
+    criterio_orden = c_orden.selectbox("Escanear por:", [
+        "🏆 Picks Definitivos (EV+ y >65%)", 
+        "💰 Mayor Rentabilidad (EV+)", 
+        "📊 Alta Probabilidad (>65%)"
+    ], on_change=reset_pagina)
     
     fecha_calc = (datetime.now() + timedelta(days=dias[dia_sel])).strftime("%Y-%m-%d")
     
@@ -346,7 +352,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 lid = p["league"]["id"]
                 loc, vis = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
                 
-                # Datos para la exportación comercial
                 liga_nombre = p["league"]["name"]
                 pais_nombre = p["league"]["country"]
                 
@@ -420,29 +425,37 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 if p["Tiene_Valor"]:
                     stake_pct = (p["Raw_Kelly"] * 100) * ajuste
                     stake_eur = (stake_pct / 100) * bankroll_actual
-                    
-                    # NUEVO: Cálculo cauto de Stake 1-10 basado en el Fractional Kelly
                     stake_1_10 = int(max(1, min(10, round(stake_pct * 2))))
                     p["Stake_1_10"] = stake_1_10
                 else:
                     stake_eur = 0.0
                     p["Stake_1_10"] = 1
                 
-                if criterio_orden == "💰 Importe (EV+)":
+                p["Stake_Eur"] = stake_eur
+                
+                # --- NUEVA LÓGICA DE FILTRADO TUPLE (EL SANTO GRIAL) ---
+                if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
                     if p["Tiene_Valor"] and stake_eur >= APUESTA_MINIMA_EUROS:
-                        p["Stake_Eur"] = stake_eur
                         picks_finales.append(p)
-                else:
+                elif criterio_orden == "📊 Alta Probabilidad (>65%)":
                     if p["Prob"] >= 0.65:
-                        p["Stake_Eur"] = stake_eur
+                        picks_finales.append(p)
+                elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
+                    # Exigimos AMBAS cosas a la vez
+                    if p["Tiene_Valor"] and p["Prob"] >= 0.65 and stake_eur >= APUESTA_MINIMA_EUROS:
                         picks_finales.append(p)
             
-            if criterio_orden == "💰 Importe (EV+)":
+            # --- NUEVA LÓGICA DE ORDENACIÓN ---
+            if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
                 picks_ordenados = sorted(picks_finales, key=lambda x: x["Stake_Eur"], reverse=True)
-                mensaje_exito = f"Se han filtrado {len(picks_ordenados)} picks de Valor Real."
-            else:
+                mensaje_exito = f"Se han filtrado {len(picks_ordenados)} picks de Valor Real (EV+)."
+            elif criterio_orden == "📊 Alta Probabilidad (>65%)":
                 picks_ordenados = sorted(picks_finales, key=lambda x: x["Prob"], reverse=True)
-                mensaje_exito = f"Mostrando {len(picks_ordenados)} selecciones de alta probabilidad."
+                mensaje_exito = f"Mostrando {len(picks_ordenados)} selecciones de alta probabilidad estadística."
+            else:
+                # Ordenamos primero por Cuota de rentabilidad (Stake) y luego por Probabilidad
+                picks_ordenados = sorted(picks_finales, key=lambda x: (x["Stake_Eur"], x["Prob"]), reverse=True)
+                mensaje_exito = f"El Santo Grial: {len(picks_ordenados)} picks que combinan rentabilidad matemática (EV+) y seguridad (>65%)."
 
             if picks_ordenados:
                 st.success(mensaje_exito)
@@ -499,7 +512,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                             cc4.write("⚠️ *Sin Valor Matemático*")
                             cc5.button("No Operable", key=f"btn_nop_{pick_key_ui}", disabled=True)
                         
-                        # --- MODULO ACTUALIZADO CON STAKE ---
                         with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
                             datos_crudos = f"""**DATOS DEL PARTIDO**
 - **Partido:** {pick['Partido']}
@@ -522,7 +534,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                         
                         st.divider()
             else:
-                st.warning("No hay resultados que superen los filtros de rentabilidad.")
+                st.warning("No hay resultados que superen los filtros de rentabilidad y probabilidad a la vez. Prueba a bajar tus exigencias o cambiar de día.")
         else:
             st.warning("El modelo no encontró ningún pick relevante para hoy.")
 
