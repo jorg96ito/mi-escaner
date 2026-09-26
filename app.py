@@ -1,25 +1,22 @@
 import streamlit as st
 import requests
+import numpy as np
 from scipy.stats import poisson, nbinom
 from datetime import datetime, timedelta
 import pandas as pd
 import re
-import time
 import math
-import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V18.3 | The Holy Grail Filter", layout="wide")
+st.set_page_config(page_title="Quant Pro V18.4 | Expert Math & Stake", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
-BANKROLL_INICIAL = 1000.0
-APUESTA_MINIMA_EUROS = 0.20
 ITEMS_POR_PAGINA = 10
 
-# EXPANSIÓN MUNDIAL: 60+ Ligas Domésticas + Regionalligas Alemanas
+# EXPANSIÓN MASIVA: ~90 Ligas Domésticas (Mercados principales y exóticos)
 PAISES_LIGAS = {
     "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
     "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
@@ -42,139 +39,75 @@ PAISES_LIGAS = {
     "Croacia": {"HNL": 210},
     "Serbia": {"Super Liga": 288},
     "República Checa": {"First League": 345},
-    "Brasil": {"Serie A": 71, "Serie B": 72},
+    "Irlanda": {"Premier Division": 357, "First Division": 358},
+    "Islandia": {"Úrvalsdeild": 118},
+    "Brasil": {"Serie A": 71, "Serie B": 72, "Serie C": 73},
     "Argentina": {"Liga Profesional": 128, "Primera Nacional": 131},
     "EEUU": {"MLS": 253, "USL Championship": 255},
     "México": {"Liga MX": 262, "Liga de Expansión": 263},
-    "Colombia": {"Primera A": 239},
-    "Chile": {"Primera División": 265},
+    "Colombia": {"Primera A": 239, "Primera B": 240},
+    "Chile": {"Primera División": 265, "Primera B": 264},
     "Uruguay": {"Primera División": 268},
     "Perú": {"Liga 1": 281},
     "Ecuador": {"Liga Pro": 242},
-    "Japón": {"J1 League": 98, "J2 League": 99},
-    "Corea del Sur": {"K League 1": 292},
-    "Arabia Saudita": {"Pro League": 307},
-    "Australia": {"A-League": 188}
+    "Paraguay": {"Primera División": 250},
+    "Bolivia": {"Primera División": 236},
+    "Venezuela": {"Primera División": 299},
+    "Costa Rica": {"Primera División": 139},
+    "Japón": {"J1 League": 98, "J2 League": 99, "J3 League": 100},
+    "Corea del Sur": {"K League 1": 292, "K League 2": 293},
+    "Arabia Saudita": {"Pro League": 307, "Division 1": 308},
+    "Australia": {"A-League": 188},
+    "Sudáfrica": {"Premier League": 288},
+    "Egipto": {"Premier League": 233},
+    "Marruecos": {"Botola Pro": 122},
+    "Irán": {"Pro League": 290}
 }
 
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
 # ---------------------------------------------------------
-# 2. SISTEMA DE TRACKING Y MEMORIA
+# 2. MOTORES MATEMÁTICOS AFINADOS (QUANT PRO V18.4)
 # ---------------------------------------------------------
-TRACKER_FILE = "tracking_apuestas.csv"
 
-def init_tracker():
-    if not os.path.exists(TRACKER_FILE):
-        df = pd.DataFrame(columns=["Fecha", "Fixture_ID", "Partido", "Mercado", "Cuota", "Stake_Eur", "Prob_Modelo", "Estado", "PnL"])
-        df.to_csv(TRACKER_FILE, index=False)
-
-def guardar_pick(fixture_id, partido, mercado, cuota, stake, prob):
-    df = pd.read_csv(TRACKER_FILE)
-    nuevo = pd.DataFrame([{
-        "Fecha": datetime.now().strftime("%Y-%m-%d"),
-        "Fixture_ID": str(fixture_id), "Partido": partido, "Mercado": mercado, 
-        "Cuota": cuota, "Stake_Eur": stake, "Prob_Modelo": prob, "Estado": "Pendiente", "PnL": 0.0
-    }])
-    df = pd.concat([df, nuevo], ignore_index=True)
-    df.to_csv(TRACKER_FILE, index=False)
-    st.toast(f"✅ Pick guardado: {partido} - {mercado}")
-
-def obtener_picks_historicos():
-    init_tracker()
-    try:
-        df = pd.read_csv(TRACKER_FILE)
-        if df.empty: return set()
-        historico = set()
-        for _, row in df.iterrows():
-            try: fid = str(int(float(row["Fixture_ID"])))
-            except: fid = str(row["Fixture_ID"]).strip()
-            merc = str(row["Mercado"]).strip()
-            historico.add(f"{fid}_{merc}")
-        return historico
-    except: return set()
-
-def calcular_bankroll_actual():
-    init_tracker()
-    df = pd.read_csv(TRACKER_FILE)
-    return BANKROLL_INICIAL + df["PnL"].sum()
-
-def auto_resolver_apuestas():
-    df = pd.read_csv(TRACKER_FILE)
-    pendientes = df[df["Estado"] == "Pendiente"]
-    if pendientes.empty: return 0
-        
-    resueltas_hoy = 0
-    for idx, row in pendientes.iterrows():
-        try: fid_limpio = int(float(row['Fixture_ID']))
-        except: fid_limpio = row['Fixture_ID']
-            
-        url = f"https://v3.football.api-sports.io/fixtures?id={fid_limpio}"
-        try:
-            res = requests.get(url, headers=HEADERS, timeout=5).json()
-            if not res.get("response"): continue
-            
-            fixture_data = res["response"][0]
-            status = fixture_data["fixture"]["status"]["short"]
-            
-            if status in ["FT", "AET", "PEN"]:
-                goles_l = fixture_data["goals"]["home"]
-                goles_v = fixture_data["goals"]["away"]
-                mercado = row["Mercado"]
-                cuota = row["Cuota"]
-                stake = row["Stake_Eur"]
-                
-                if mercado in ["Local (1)", "Empate (X)", "Visitante (2)", "Over 2.5 Goles", "Ambos Marcan (Sí)"]:
-                    ganada = False
-                    if mercado == "Local (1)": ganada = (goles_l > goles_v)
-                    elif mercado == "Empate (X)": ganada = (goles_l == goles_v)
-                    elif mercado == "Visitante (2)": ganada = (goles_l < goles_v)
-                    elif mercado == "Over 2.5 Goles": ganada = ((goles_l + goles_v) > 2.5)
-                    elif mercado == "Ambos Marcan (Sí)": ganada = (goles_l > 0 and goles_v > 0)
-                    
-                    df.at[idx, "Estado"] = "Ganada" if ganada else "Perdida"
-                    df.at[idx, "PnL"] = round((stake * cuota) - stake, 2) if ganada else -stake
-                    resueltas_hoy += 1
-                time.sleep(0.3) 
-        except: pass
-    df.to_csv(TRACKER_FILE, index=False)
-    return resueltas_hoy
-
-# ---------------------------------------------------------
-# 3. MOTORES MATEMÁTICOS AFINADOS
-# ---------------------------------------------------------
 def limpiar_nombre(texto): 
     return re.sub(r'\b(fc|cf|ud|sd|cd|real|1\.)\b', '', (texto or "").lower()).strip()
 
-def calcular_momentum_ema(form_str, alpha=0.65):
+def calcular_momentum_sigmoideo(form_str):
     if not form_str: return 1.0
-    pesos = {'W': 1.25, 'D': 1.00, 'L': 0.75}
-    score, peso_total = 0.0, 0.0
-    historial = list(form_str[-5:]) if len(form_str) >= 5 else list(form_str)
-    for i, res in enumerate(reversed(historial)):
-        decay = alpha ** i
-        score += pesos.get(res, 1.0) * decay
-        peso_total += decay
-    return score / peso_total if peso_total > 0 else 1.0
+    pesos = {'W': 3, 'D': 1, 'L': 0}
+    puntos_ponderados = 0.0
+    peso_total = 0.0
+    
+    for i, res in enumerate(reversed(form_str[-5:])):
+        decay = 0.75 ** i
+        puntos_ponderados += pesos.get(res, 1) * decay
+        peso_total += 3 * decay
+        
+    ratio_rendimiento = puntos_ponderados / peso_total if peso_total > 0 else 0.33
+    z = (ratio_rendimiento - 0.5) * 4 
+    momentum = 1.0 + (math.tanh(z) * 0.15)
+    return momentum
 
-def desviggar_cuotas_power_method(cuotas_dict, keys):
+def desviggar_cuotas_shin_aproximado(cuotas_dict, keys):
     if not all(k in cuotas_dict for k in keys): return {}
     inv_odds = [1.0 / cuotas_dict[k] for k in keys]
     margin = sum(inv_odds) - 1.0
+    
     if margin <= 0: return {f"TrueProb_{k}": p for k, p in zip(keys, inv_odds)}
-        
-    low, high = 0.5, 1.5 
-    for _ in range(25): 
-        mid = (low + high) / 2.0
-        if sum(math.pow(p, mid) for p in inv_odds) > 1.0: low = mid
-        else: high = mid
-            
-    n = (low + high) / 2.0
+    
     cuotas_reales = {}
-    for k in keys:
-        true_p = math.pow(1.0 / cuotas_dict[k], n)
-        cuotas_reales[f"TrueProb_{k}"] = true_p
-        cuotas_reales[f"TrueOdd_{k}"] = 1.0 / true_p if true_p > 0 else 0
+    temp_probs = []
+    
+    for p in inv_odds:
+        true_p_approx = p - (margin * (p ** 1.5) / sum(x ** 1.5 for x in inv_odds))
+        temp_probs.append(true_p_approx)
+        
+    for i, k in enumerate(keys):
+        norm_p = max(0.001, temp_probs[i] / sum(temp_probs))
+        cuotas_reales[f"TrueProb_{k}"] = norm_p
+        cuotas_reales[f"TrueOdd_{k}"] = 1.0 / norm_p
+        
     return cuotas_reales
 
 @st.cache_data(ttl=3600)
@@ -185,21 +118,22 @@ def obtener_fuerzas_liga(league_id):
         res = requests.get(url, headers=HEADERS, timeout=8).json()
         if not res.get("response"): return {}, {}
         standings = res["response"][0]["league"]["standings"][0]
-        pj_loc = sum(t["home"]["played"] for t in standings)
-        if pj_loc == 0: return {}, {}
+        pj_totales = sum(t["all"]["played"] for t in standings) / 2
+        if pj_totales == 0: return {}, {}
         
-        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / pj_loc)
+        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / sum(t["home"]["played"] for t in standings))
         avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / sum(t["away"]["played"] for t in standings))
         
         stats_eq = {}
-        K = 5.0 
-
+        
         for t in standings:
             nom = limpiar_nombre(t["team"]["name"])
-            mom = calcular_momentum_ema(t.get("form", ""))
+            mom = calcular_momentum_sigmoideo(t.get("form", ""))
             
             hl_pj, hl_gf, hl_gc = t["home"]["played"], t["home"]["goals"]["for"], t["home"]["goals"]["against"]
             aw_pj, aw_gf, aw_gc = t["away"]["played"], t["away"]["goals"]["for"], t["away"]["goals"]["against"]
+            
+            K = max(1.0, 10.0 - (hl_pj * 0.5)) 
             
             fa_l = (((hl_gf + K * avg_g_loc) / (hl_pj + K)) / avg_g_loc) * mom
             fd_l = (((hl_gc + K * avg_g_vis) / (hl_pj + K)) / avg_g_vis) / mom
@@ -210,44 +144,58 @@ def obtener_fuerzas_liga(league_id):
         return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
     except: return {}, {}
 
-def ajuste_dixon_coles(x, y, l_l, l_v):
-    rho = -0.13
-    if x == 0 and y == 0: return max(0.0, 1.0 - l_l * l_v * rho)
-    if x == 0 and y == 1: return max(0.0, 1.0 + l_l * rho)
-    if x == 1 and y == 0: return max(0.0, 1.0 + l_v * rho)
-    if x == 1 and y == 1: return max(0.0, 1.0 - rho)
-    return 1.0
-
-def calcular_mercados(xg_l, xg_v):
-    p_1, p_x, p_2, p_ov25, p_btts = 0.0, 0.0, 0.0, 0.0, 0.0
+def matriz_dixon_coles_normalizada(xg_l, xg_v):
+    xg_tot = xg_l + xg_v
+    rho = -0.15 if xg_tot < 2.2 else (-0.12 if xg_tot < 2.8 else -0.09)
+    
+    matriz = np.zeros((10, 10))
     for g_l in range(10):
         for g_v in range(10):
             p_base = poisson.pmf(g_l, xg_l) * poisson.pmf(g_v, xg_v)
-            p_ex = p_base * ajuste_dixon_coles(g_l, g_v, xg_l, xg_v)
             
-            if g_l > g_v: p_1 += p_ex
-            elif g_l == g_v: p_x += p_ex
-            else: p_2 += p_ex
-            if (g_l + g_v) > 2.5: p_ov25 += p_ex
-            if g_l > 0 and g_v > 0: p_btts += p_ex
+            adj = 1.0
+            if g_l == 0 and g_v == 0: adj = 1.0 - xg_l * xg_v * rho
+            elif g_l == 0 and g_v == 1: adj = 1.0 + xg_l * rho
+            elif g_l == 1 and g_v == 0: adj = 1.0 + xg_v * rho
+            elif g_l == 1 and g_v == 1: adj = 1.0 - rho
             
-    t = p_1 + p_x + p_2
-    if t == 0: return {'1': 0.33, 'X': 0.34, '2': 0.33}, 0.5, 0.5
-    return {'1': p_1/t, 'X': p_x/t, '2': p_2/t}, p_ov25/t, p_btts/t
+            matriz[g_l, g_v] = max(0.0, p_base * adj)
+            
+    suma_matriz = np.sum(matriz)
+    return matriz / suma_matriz
+
+def calcular_mercados(xg_l, xg_v):
+    matriz = matriz_dixon_coles_normalizada(xg_l, xg_v)
+    
+    p_1 = np.sum(np.tril(matriz, -1))
+    p_x = np.sum(np.diag(matriz))      
+    p_2 = np.sum(np.triu(matriz, 1))  
+    
+    p_ov25 = 0.0
+    for g_l in range(10):
+        for g_v in range(10):
+            if (g_l + g_v) > 2.5:
+                p_ov25 += matriz[g_l, g_v]
+                
+    p_btts = np.sum(matriz[1:, 1:])
+    return {'1': p_1, 'X': p_x, '2': p_2}, p_ov25, p_btts
 
 def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
-    xg_total = (xg_l + xg_v) 
-    exp_corners = 7.5 + (xg_total * 0.85) 
-    if prob_1x2['1'] > 0.65 or prob_1x2['2'] > 0.65: exp_corners *= 1.05 
-        
-    v = exp_corners + (0.05 * exp_corners**2)
+    xg_total = xg_l + xg_v
+    desigualdad = abs(prob_1x2['1'] - prob_1x2['2'])
+    
+    exp_corners = 8.0 + (xg_total * 0.7) - (desigualdad * 1.5)
+    exp_corners *= ritmo_partido
+    
+    v = exp_corners + (0.08 * exp_corners**2)
     n = (exp_corners**2) / (v - exp_corners)
     p_nbinom = exp_corners / v
     p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom) if exp_corners < v else 0.5
 
-    tension = 1.0 - abs(prob_1x2['1'] - prob_1x2['2'])
-    exp_tarjetas = (3.0 + (tension * 2.5)) * ritmo_partido
+    tension = prob_1x2['X'] * 3.0 
+    exp_tarjetas = 3.2 + (tension) * ritmo_partido
     p_ov45t = 1.0 - poisson.cdf(4, exp_tarjetas)
+    
     return p_ov95c, p_ov45t
 
 def obtener_cuotas_partido(fixture_id):
@@ -293,13 +241,9 @@ def cargar_proxima_jornada_liga(league_id):
     except: return []
 
 # ---------------------------------------------------------
-# 4. INTERFAZ GRÁFICA Y GENERADOR DE DATOS CRUDOS
+# 3. INTERFAZ GRÁFICA Y GENERADOR DE DATOS CRUDOS
 # ---------------------------------------------------------
-bankroll_actual = calcular_bankroll_actual()
-
-st.sidebar.markdown(f"### 🏦 Bankroll: **€{bankroll_actual:.2f}**")
-st.sidebar.caption("Se actualiza automáticamente al resolver partidos.")
-modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas", "3️⃣ Mi Cartera (Resultados)"])
+modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("🌍 Explorador de Ligas")
@@ -317,7 +261,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
     
     def reset_pagina(): st.session_state.pagina_actual = 1
     
-    # 🏆 TERCERA OPCIÓN AÑADIDA: EL SANTO GRIAL
     criterio_orden = c_orden.selectbox("Escanear por:", [
         "🏆 Picks Definitivos (EV+ y >65%)", 
         "💰 Mayor Rentabilidad (EV+)", 
@@ -333,13 +276,13 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         st.session_state.pagina_actual = 1 
         partidos = cargar_datos_jornada(fecha_calc)
         if not partidos:
-            st.info("No hay partidos programados en las más de 60 ligas configuradas para este día.")
+            st.info("No hay partidos programados en las más de 90 ligas configuradas para este día.")
             st.session_state.raw_picks = [] 
         else:
             ligas_activas = list(set([p["league"]["id"] for p in partidos]))
             stats_liga, medias_liga = {}, {}
             
-            with st.spinner(f"Evaluando {len(partidos)} partidos alrededor del mundo..."):
+            with st.spinner(f"Evaluando {len(partidos)} partidos en todo el mundo usando NumPy..."):
                 for lid in ligas_activas:
                     s, m = obtener_fuerzas_liga(lid)
                     stats_liga[lid], medias_liga[lid] = s, m
@@ -372,7 +315,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 p_ov95c, p_ov45t = calcular_corners_y_tarjetas(xG_loc, xG_vis, prob_1x2, ritmo_partido)
                 cuotas = obtener_cuotas_partido(f_id)
                 
-                cuotas_desviggadas = desviggar_cuotas_power_method(cuotas, ["1", "X", "2"])
+                cuotas_desviggadas = desviggar_cuotas_shin_aproximado(cuotas, ["1", "X", "2"])
                 
                 mercados = [
                     ("Local (1)", prob_1x2['1'], cuotas.get("1", 0), cuotas_desviggadas.get("TrueProb_1", 0)),
@@ -424,37 +367,31 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
             for p in raw_picks:
                 if p["Tiene_Valor"]:
                     stake_pct = (p["Raw_Kelly"] * 100) * ajuste
-                    stake_eur = (stake_pct / 100) * bankroll_actual
-                    stake_1_10 = int(max(1, min(10, round(stake_pct * 2))))
-                    p["Stake_1_10"] = stake_1_10
+                    # Stake directo del 1 al 10 en números enteros
+                    p["Stake_1_10"] = int(max(1, min(10, round(stake_pct * 2))))
                 else:
-                    stake_eur = 0.0
-                    p["Stake_1_10"] = 1
+                    p["Stake_1_10"] = 0
                 
-                p["Stake_Eur"] = stake_eur
-                
-                # --- NUEVA LÓGICA DE FILTRADO TUPLE (EL SANTO GRIAL) ---
+                # FILTRADO TUPLE (EL SANTO GRIAL)
                 if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
-                    if p["Tiene_Valor"] and stake_eur >= APUESTA_MINIMA_EUROS:
+                    if p["Tiene_Valor"] and p["Stake_1_10"] >= 1:
                         picks_finales.append(p)
                 elif criterio_orden == "📊 Alta Probabilidad (>65%)":
                     if p["Prob"] >= 0.65:
                         picks_finales.append(p)
                 elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
-                    # Exigimos AMBAS cosas a la vez
-                    if p["Tiene_Valor"] and p["Prob"] >= 0.65 and stake_eur >= APUESTA_MINIMA_EUROS:
+                    if p["Tiene_Valor"] and p["Prob"] >= 0.65 and p["Stake_1_10"] >= 1:
                         picks_finales.append(p)
             
-            # --- NUEVA LÓGICA DE ORDENACIÓN ---
+            # ORDENACIÓN
             if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
-                picks_ordenados = sorted(picks_finales, key=lambda x: x["Stake_Eur"], reverse=True)
+                picks_ordenados = sorted(picks_finales, key=lambda x: x["Stake_1_10"], reverse=True)
                 mensaje_exito = f"Se han filtrado {len(picks_ordenados)} picks de Valor Real (EV+)."
             elif criterio_orden == "📊 Alta Probabilidad (>65%)":
                 picks_ordenados = sorted(picks_finales, key=lambda x: x["Prob"], reverse=True)
                 mensaje_exito = f"Mostrando {len(picks_ordenados)} selecciones de alta probabilidad estadística."
             else:
-                # Ordenamos primero por Cuota de rentabilidad (Stake) y luego por Probabilidad
-                picks_ordenados = sorted(picks_finales, key=lambda x: (x["Stake_Eur"], x["Prob"]), reverse=True)
+                picks_ordenados = sorted(picks_finales, key=lambda x: (x["Stake_1_10"], x["Prob"]), reverse=True)
                 mensaje_exito = f"El Santo Grial: {len(picks_ordenados)} picks que combinan rentabilidad matemática (EV+) y seguridad (>65%)."
 
             if picks_ordenados:
@@ -480,37 +417,18 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 fin_idx = inicio_idx + ITEMS_POR_PAGINA
                 picks_pagina = picks_ordenados[inicio_idx:fin_idx]
                 
-                picks_historicos = obtener_picks_historicos()
-                if 'picks_registrados' not in st.session_state: st.session_state.picks_registrados = set()
-                
-                def registrar_accion(f_id, partido, mercado, cuota, stake, prob, key_interna):
-                    guardar_pick(f_id, partido, mercado, cuota, stake, prob)
-                    st.session_state.picks_registrados.add(key_interna)
-
                 for idx, pick in enumerate(picks_pagina, start=inicio_idx+1):
                     with st.container():
-                        cc1, cc2, cc3, cc4, cc5 = st.columns([3, 2, 1.5, 2, 1.5])
+                        # UI Simplificada y adaptada para solo mostrar Stake 1-10
+                        cc1, cc2, cc3, cc4 = st.columns([3, 2.5, 1.5, 2])
                         cc1.write(f"⚽ **{pick['Partido']}**")
                         cc2.write(f"🎯 **{pick['Mercado']}** (Cuota: {pick['Cuota']})")
                         cc3.write(f"📊 Prob: **{pick['Prob']*100:.1f}%**")
                         
-                        pick_key_ui = f"{pick['f_id']}_{pick['Mercado']}_{idx}"
-                        pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
-                        
-                        ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
-
-                        if pick['Tiene_Valor'] and pick['Stake_Eur'] >= APUESTA_MINIMA_EUROS:
-                            cc4.write(f"💰 Apostar: **€{pick['Stake_Eur']:.2f}**")
-                            
-                            if ya_registrado:
-                                cc5.button("✅ Guardado", key=f"btn_{pick_key_ui}", disabled=True)
-                            else:
-                                cc5.button("Registrar Pick", key=f"btn_{pick_key_ui}", 
-                                           on_click=registrar_accion, 
-                                           args=(pick['f_id'], pick['Partido'], pick['Mercado'], pick['Cuota'], pick['Stake_Eur'], pick['Prob'], pick_key_ui))
+                        if pick['Tiene_Valor'] and pick['Stake_1_10'] >= 1:
+                            cc4.write(f"🔥 Stake: **{pick['Stake_1_10']}/10**")
                         else:
                             cc4.write("⚠️ *Sin Valor Matemático*")
-                            cc5.button("No Operable", key=f"btn_nop_{pick_key_ui}", disabled=True)
                         
                         with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
                             datos_crudos = f"""**DATOS DEL PARTIDO**
@@ -519,7 +437,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
 - **Horario:** {pick['Fecha_Hora']}
 - **Mercado Recomendado:** {pick['Mercado']}
 - **Cuota Casa de Apuestas:** {pick['Cuota']}
-- **Stake Recomendado (1-10):** {pick['Stake_1_10']}/10
+- **Stake Recomendado (1-10):** {max(1, pick['Stake_1_10'])}/10
 - **Probabilidad Real (Modelo):** {pick['Prob']*100:.1f}%
 - **Valor Esperado (EV+):** {pick['EV']*100:.1f}%
 
@@ -557,37 +475,3 @@ elif modo_vista == "2️⃣ Explorador de Ligas":
                 "% Gana Local": f"{probs['1']*100:.1f}%", "% Empate": f"{probs['X']*100:.1f}%", "% Gana Vis": f"{probs['2']*100:.1f}%"
             })
         st.dataframe(pd.DataFrame(tabla_liga), use_container_width=True)
-
-elif modo_vista == "3️⃣ Mi Cartera (Resultados)":
-    st.title("💼 Rendimiento del Fondo")
-    if st.button("🔄 Auto-Resolver Partidos Finalizados"):
-        with st.spinner("Conectando con la API..."):
-            resueltas = auto_resolver_apuestas()
-            st.success(f"Se han actualizado {resueltas} apuestas finalizadas.")
-            time.sleep(1)
-            st.rerun()
-
-    df = pd.read_csv(TRACKER_FILE)
-    if df.empty: st.info("Aún no has registrado ninguna apuesta.")
-    else:
-        df_finalizadas = df[df["Estado"] != "Pendiente"]
-        total_apostado = df_finalizadas["Stake_Eur"].sum()
-        total_pnl = df_finalizadas["PnL"].sum()
-        yield_pct = (total_pnl / total_apostado * 100) if total_apostado > 0 else 0
-        aciertos = len(df_finalizadas[df_finalizadas["Estado"] == "Ganada"])
-        total_resueltas = len(df_finalizadas)
-        hit_rate = (aciertos / total_resueltas * 100) if total_resueltas > 0 else 0
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Beneficio Neto (PnL)", f"€{total_pnl:.2f}")
-        c2.metric("Yield (ROI)", f"{yield_pct:.2f}%")
-        c3.metric("Hit Rate (Aciertos)", f"{hit_rate:.1f}% ({aciertos}/{total_resueltas})")
-
-        if not df_finalizadas.empty:
-            df_finalizadas["Bank_Progresivo"] = BANKROLL_INICIAL + df_finalizadas["PnL"].cumsum()
-            chart_data = df_finalizadas[["Bank_Progresivo"]].copy()
-            chart_data.loc[-1] = [BANKROLL_INICIAL]
-            chart_data.index = chart_data.index + 1
-            st.line_chart(chart_data.sort_index())
-
-        st.dataframe(df.sort_values(by="Fecha", ascending=False), use_container_width=True)
