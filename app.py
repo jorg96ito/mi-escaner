@@ -11,7 +11,7 @@ import os
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.1 | Aggressive Shrinkage & Tamed Kelly", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.2 | Ultimate Guardrails & Tamed Kelly", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -221,7 +221,14 @@ def obtener_fuerzas_liga(league_id):
             fa_v = (((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis) * mom
             fd_v = (((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc) / mom
             
-            stats_eq[nom] = {"FA_H": fa_l, "FD_H": fd_l, "FA_A": fa_v, "FD_A": fd_v}
+            # 🚧 BARRERA 1: Capamos las fuerzas. Ningún equipo puede ser 3 veces mejor que 
+            # la media, ni infinitamente malo. Evita divisiones por cero o explosiones.
+            stats_eq[nom] = {
+                "FA_H": min(max(fa_l, 0.3), 3.0), 
+                "FD_H": min(max(fd_l, 0.3), 3.0), 
+                "FA_A": min(max(fa_v, 0.3), 3.0), 
+                "FD_A": min(max(fd_v, 0.3), 3.0)
+            }
         return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
     except: return {}, {}
 
@@ -368,8 +375,13 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 sv = stats_liga.get(lid, {}).get(limpiar_nombre(vis), {"FA_A": 1.0, "FD_A": 1.0})
                 ritmo_partido = 1.0 + ((sl["FA_H"] + sv["FA_A"] - 2.0) * 0.15)
                 
-                xG_loc = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5) * ritmo_partido
-                xG_vis = sv["FA_A"] * sl["FD_H"] * medias_liga.get(lid, {}).get("avg_away", 1.2) * ritmo_partido
+                # 🚧 BARRERA 2: Capar los Goles Esperados (xG) a un máximo de 3.5.
+                # Si el modelo calcula 7 goles esperados por un bug de la API, lo frena aquí.
+                xG_loc_raw = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5) * ritmo_partido
+                xG_vis_raw = sv["FA_A"] * sl["FD_H"] * medias_liga.get(lid, {}).get("avg_away", 1.2) * ritmo_partido
+                
+                xG_loc = min(xG_loc_raw, 3.5)
+                xG_vis = min(xG_vis_raw, 3.5)
                 
                 prob_1x2, p_ov25, p_btts = calcular_mercados(xG_loc, xG_vis)
                 p_ov95c, p_ov45t = calcular_corners_y_tarjetas(xG_loc, xG_vis, prob_1x2, ritmo_partido)
@@ -389,19 +401,27 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     ("Over 2.5 Goles", p_ov25, cuotas.get("O25", 0), prob_real_o25),
                     ("Ambos Marcan (Sí)", p_btts, cuotas.get("BTTS_Y", 0), prob_real_btts),
                     ("Over 9.5 Córners", p_ov95c, cuotas.get("O95C", 0), prob_real_o95c),
-                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0)
+                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0) 
                 ]
 
                 for n_merc, p_real, cuota, p_real_casa in mercados:
                     if cuota > 1.20:
                         ev = (p_real * cuota) - 1
                         ev_valido = True
+                        
+                        # Filtro de cuotas desviggadas (evita arbitrajes falsos)
                         if p_real_casa > 0 and (p_real - p_real_casa) < 0.005:
+                            ev_valido = False
+                            
+                        # 🚧 BARRERA 3: Anclaje al mercado (Market Implied Check)
+                        # Si el EV es mayor al 45% (0.45), el modelo asume que las casas de apuestas 
+                        # saben algo que él no (lesionados, suplentes, errores API) y anula el pick.
+                        if ev > 0.45:
                             ev_valido = False
                             
                         tiene_valor = (ev > 0.025 and ev_valido)
                         
-                        if tiene_valor or p_real >= 0.65:
+                        if tiene_valor or (p_real >= 0.65 and ev_valido):
                             raw_picks_temp.append({
                                 "f_id": f_id, "Partido": f"{loc} vs {vis}", "Mercado": n_merc,
                                 "Prob": p_real, "Cuota": cuota, "EV": ev, "Tiene_Valor": tiene_valor,
