@@ -11,7 +11,7 @@ import os
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19 | Continuous Math & No-Euro UI", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.1 | Aggressive Shrinkage & Tamed Kelly", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -389,7 +389,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     ("Over 2.5 Goles", p_ov25, cuotas.get("O25", 0), prob_real_o25),
                     ("Ambos Marcan (Sí)", p_btts, cuotas.get("BTTS_Y", 0), prob_real_btts),
                     ("Over 9.5 Córners", p_ov95c, cuotas.get("O95C", 0), prob_real_o95c),
-                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0) # Difícil desviggar sin opuestas exactas
+                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0)
                 ]
 
                 for n_merc, p_real, cuota, p_real_casa in mercados:
@@ -427,24 +427,28 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
                     if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
-            # --- CÁLCULO DE STAKE QUANT (KELLY CON SHRINKAGE ENTRÓPICO) ---
+            # --- CÁLCULO DE STAKE QUANT (KELLY CON SHRINKAGE AGRESIVO) ---
             for p in picks_pre_filtrados:
-                # Shrinkage Logarítmico (Penalización justa por varianza)
-                penalizacion_entropica = 0.01 + (math.log(p["Cuota"]) * 0.02)
-                prob_conservadora = p["Prob"] * (1.0 - penalizacion_entropica)
+                # 📉 FIX 1: Shrinkage de Riesgo (Protección brutal contra Underdogs)
+                # En lugar de restar un % fijo logarítmico, dividimos la probabilidad. 
+                # Cuota 1.5 -> Reduce ~2.5% | Cuota 3.0 -> Reduce ~10% | Cuota 6.5 -> Reduce ~27%
+                factor_castigo = 1.0 + (0.05 * (p["Cuota"] - 1.0))
+                prob_conservadora = p["Prob"] / factor_castigo
                 
-                # Recalculamos EV con la probabilidad penalizada inteligente
+                # Recalculamos EV con la probabilidad severamente penalizada
                 ev_ajustado = (prob_conservadora * p["Cuota"]) - 1.0
                 
                 if ev_ajustado > 0:
                     b = p["Cuota"] - 1.0
                     full_kelly = ev_ajustado / b
                     
-                    # Suavizado Exponencial del Kelly
-                    multiplicador_dinamico = 0.25 / (p["Cuota"] ** 0.6)
+                    # 📉 FIX 2: Multiplicador Dinámico Conservador (Tamed Kelly)
+                    # Usamos una base máxima del 10% (0.10) de la fracción de Kelly.
+                    # Cuota 1.5 -> Multiplicador ~8.1% | Cuota 3.0 -> ~5.7% | Cuota 6.5 -> ~3.9%
+                    multiplicador_dinamico = 0.10 / math.sqrt(p["Cuota"])
                     
-                    # Capamos al 25% absoluto
-                    multiplicador_dinamico = min(multiplicador_dinamico, 0.25)
+                    # Límite estricto del multiplicador al 10% por seguridad del fondo
+                    multiplicador_dinamico = min(multiplicador_dinamico, 0.10)
                     
                     kelly_fraccional = full_kelly * multiplicador_dinamico 
                     p["Stake_Pct_Ideal"] = kelly_fraccional * 100
