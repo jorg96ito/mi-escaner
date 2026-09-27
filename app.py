@@ -6,17 +6,20 @@ from datetime import datetime, timedelta
 import pandas as pd
 import re
 import math
+import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V18.4 | Expert Math & Stake", layout="wide")
+st.set_page_config(page_title="Quant Pro V18.6 | The Master Algo & Global Reach", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
+BANKROLL_INICIAL = 1000.0
+APUESTA_MINIMA_EUROS = 0.20
 ITEMS_POR_PAGINA = 10
 
-# EXPANSIÓN MASIVA: ~90 Ligas Domésticas (Mercados principales y exóticos)
+# EXPANSIÓN GLOBAL (EL VEREDICTO): ~110 Ligas Domésticas (Tier 1, 2 y 3 rentables)
 PAISES_LIGAS = {
     "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
     "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
@@ -34,12 +37,19 @@ PAISES_LIGAS = {
     "Dinamarca": {"Superliga": 119, "1st Division": 120},
     "Suecia": {"Allsvenskan": 113, "Superettan": 114},
     "Noruega": {"Eliteserien": 103, "Obos-Ligaen": 104},
+    "Finlandia": {"Veikkausliiga": 129, "Ykkönen": 130},
     "Polonia": {"Ekstraklasa": 106, "I Liga": 107},
     "Rumanía": {"Liga I": 283},
     "Croacia": {"HNL": 210},
     "Serbia": {"Super Liga": 288},
     "República Checa": {"First League": 345},
+    "Hungría": {"NB I": 271},
+    "Bulgaria": {"First League": 172},
+    "Eslovaquia": {"Super Liga": 332},
+    "Eslovenia": {"PrvaLiga": 373},
     "Irlanda": {"Premier Division": 357, "First Division": 358},
+    "Irlanda del Norte": {"Premiership": 184},
+    "Gales": {"Cymru Premier": 192},
     "Islandia": {"Úrvalsdeild": 118},
     "Brasil": {"Serie A": 71, "Serie B": 72, "Serie C": 73},
     "Argentina": {"Liga Profesional": 128, "Primera Nacional": 131},
@@ -53,9 +63,14 @@ PAISES_LIGAS = {
     "Paraguay": {"Primera División": 250},
     "Bolivia": {"Primera División": 236},
     "Venezuela": {"Primera División": 299},
+    "Honduras": {"Liga Nacional": 259},
+    "El Salvador": {"Primera División": 258},
     "Costa Rica": {"Primera División": 139},
     "Japón": {"J1 League": 98, "J2 League": 99, "J3 League": 100},
     "Corea del Sur": {"K League 1": 292, "K League 2": 293},
+    "China": {"Super League": 169},
+    "Tailandia": {"Thai League 1": 296},
+    "India": {"Super League": 323},
     "Arabia Saudita": {"Pro League": 307, "Division 1": 308},
     "Australia": {"A-League": 188},
     "Sudáfrica": {"Premier League": 288},
@@ -67,7 +82,47 @@ PAISES_LIGAS = {
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
 # ---------------------------------------------------------
-# 2. MOTORES MATEMÁTICOS AFINADOS (QUANT PRO V18.4)
+# 2. SISTEMA DE TRACKING (Mantenido internamente para el botón de Guardar)
+# ---------------------------------------------------------
+TRACKER_FILE = "tracking_apuestas.csv"
+
+def init_tracker():
+    if not os.path.exists(TRACKER_FILE):
+        df = pd.DataFrame(columns=["Fecha", "Fixture_ID", "Partido", "Mercado", "Cuota", "Stake_Eur", "Prob_Modelo", "Estado", "PnL"])
+        df.to_csv(TRACKER_FILE, index=False)
+
+def guardar_pick(fixture_id, partido, mercado, cuota, stake, prob):
+    df = pd.read_csv(TRACKER_FILE)
+    nuevo = pd.DataFrame([{
+        "Fecha": datetime.now().strftime("%Y-%m-%d"),
+        "Fixture_ID": str(fixture_id), "Partido": partido, "Mercado": mercado, 
+        "Cuota": cuota, "Stake_Eur": stake, "Prob_Modelo": prob, "Estado": "Pendiente", "PnL": 0.0
+    }])
+    df = pd.concat([df, nuevo], ignore_index=True)
+    df.to_csv(TRACKER_FILE, index=False)
+    st.toast(f"✅ Pick guardado: {partido} - {mercado}")
+
+def obtener_picks_historicos():
+    init_tracker()
+    try:
+        df = pd.read_csv(TRACKER_FILE)
+        if df.empty: return set()
+        historico = set()
+        for _, row in df.iterrows():
+            try: fid = str(int(float(row["Fixture_ID"])))
+            except: fid = str(row["Fixture_ID"]).strip()
+            merc = str(row["Mercado"]).strip()
+            historico.add(f"{fid}_{merc}")
+        return historico
+    except: return set()
+
+def calcular_bankroll_actual():
+    init_tracker()
+    df = pd.read_csv(TRACKER_FILE)
+    return BANKROLL_INICIAL + df["PnL"].sum()
+
+# ---------------------------------------------------------
+# 3. MOTORES MATEMÁTICOS AFINADOS (QUANT PRO V18.6)
 # ---------------------------------------------------------
 
 def limpiar_nombre(texto): 
@@ -80,9 +135,9 @@ def calcular_momentum_sigmoideo(form_str):
     peso_total = 0.0
     
     for i, res in enumerate(reversed(form_str[-5:])):
-        decay = 0.75 ** i
+        decay = 0.75 ** i 
         puntos_ponderados += pesos.get(res, 1) * decay
-        peso_total += 3 * decay
+        peso_total += 3 * decay 
         
     ratio_rendimiento = puntos_ponderados / peso_total if peso_total > 0 else 0.33
     z = (ratio_rendimiento - 0.5) * 4 
@@ -104,7 +159,7 @@ def desviggar_cuotas_shin_aproximado(cuotas_dict, keys):
         temp_probs.append(true_p_approx)
         
     for i, k in enumerate(keys):
-        norm_p = max(0.001, temp_probs[i] / sum(temp_probs))
+        norm_p = max(0.001, temp_probs[i] / sum(temp_probs)) 
         cuotas_reales[f"TrueProb_{k}"] = norm_p
         cuotas_reales[f"TrueOdd_{k}"] = 1.0 / norm_p
         
@@ -167,7 +222,7 @@ def matriz_dixon_coles_normalizada(xg_l, xg_v):
 def calcular_mercados(xg_l, xg_v):
     matriz = matriz_dixon_coles_normalizada(xg_l, xg_v)
     
-    p_1 = np.sum(np.tril(matriz, -1))
+    p_1 = np.sum(np.tril(matriz, -1)) 
     p_x = np.sum(np.diag(matriz))      
     p_2 = np.sum(np.triu(matriz, 1))  
     
@@ -187,7 +242,7 @@ def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
     exp_corners = 8.0 + (xg_total * 0.7) - (desigualdad * 1.5)
     exp_corners *= ritmo_partido
     
-    v = exp_corners + (0.08 * exp_corners**2)
+    v = exp_corners + (0.08 * exp_corners**2) 
     n = (exp_corners**2) / (v - exp_corners)
     p_nbinom = exp_corners / v
     p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom) if exp_corners < v else 0.5
@@ -241,8 +296,10 @@ def cargar_proxima_jornada_liga(league_id):
     except: return []
 
 # ---------------------------------------------------------
-# 3. INTERFAZ GRÁFICA Y GENERADOR DE DATOS CRUDOS
+# 4. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
 # ---------------------------------------------------------
+bankroll_actual = calcular_bankroll_actual()
+
 modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas"])
 
 st.sidebar.markdown("---")
@@ -257,7 +314,8 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
     dias = {"Hoy": 0, "Mañana": 1, "Pasado": 2}
     c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
     dia_sel = c_dia.selectbox("Día", list(dias.keys()))
-    max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 2, 20, 10)
+    
+    max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 5, 30, 15)
     
     def reset_pagina(): st.session_state.pagina_actual = 1
     
@@ -276,7 +334,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         st.session_state.pagina_actual = 1 
         partidos = cargar_datos_jornada(fecha_calc)
         if not partidos:
-            st.info("No hay partidos programados en las más de 90 ligas configuradas para este día.")
+            st.info("No hay partidos programados en las más de 110 ligas configuradas para este día.")
             st.session_state.raw_picks = [] 
         else:
             ligas_activas = list(set([p["league"]["id"] for p in partidos]))
@@ -340,10 +398,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                             raw_picks_temp.append({
                                 "f_id": f_id, "Partido": f"{loc} vs {vis}", "Mercado": n_merc,
                                 "Prob": p_real, "Cuota": cuota, "EV": ev, "Tiene_Valor": tiene_valor,
-                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str,
-                                "xG_loc": xG_loc, "xG_vis": xG_vis,
-                                "FA_H": sl["FA_H"], "FD_H": sl["FD_H"], 
-                                "FA_A": sv["FA_A"], "FD_A": sv["FD_A"]
+                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str
                             })
                 bar.progress((i+1)/len(partidos))
             bar.empty()
@@ -354,47 +409,71 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         picks_finales = []
         
         if raw_picks:
-            for p in raw_picks:
-                if p["Tiene_Valor"]:
-                    b = p["Cuota"] - 1.0
-                    p["Raw_Kelly"] = max(0.0, ((b * p["Prob"] - (1.0 - p["Prob"])) / b)) * 0.15
-                else:
-                    p["Raw_Kelly"] = 0.0
-
-            suma_k = sum(p["Raw_Kelly"] for p in raw_picks if p["Tiene_Valor"]) * 100
-            ajuste = (max_exposure / suma_k) if suma_k > max_exposure else 1.0
+            picks_validos = [p for p in raw_picks if p["Tiene_Valor"]]
             
-            for p in raw_picks:
-                if p["Tiene_Valor"]:
-                    stake_pct = (p["Raw_Kelly"] * 100) * ajuste
-                    # Stake directo del 1 al 10 en números enteros
-                    p["Stake_1_10"] = int(max(1, min(10, round(stake_pct * 2))))
-                else:
-                    p["Stake_1_10"] = 0
-                
-                # FILTRADO TUPLE (EL SANTO GRIAL)
+            # 1. PRE-FILTRADO SEGÚN TU CRITERIO (EL SANTO GRIAL)
+            picks_pre_filtrados = []
+            for p in picks_validos:
                 if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
-                    if p["Tiene_Valor"] and p["Stake_1_10"] >= 1:
-                        picks_finales.append(p)
+                    picks_pre_filtrados.append(p)
                 elif criterio_orden == "📊 Alta Probabilidad (>65%)":
-                    if p["Prob"] >= 0.65:
-                        picks_finales.append(p)
+                    if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
                 elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
-                    if p["Tiene_Valor"] and p["Prob"] >= 0.65 and p["Stake_1_10"] >= 1:
-                        picks_finales.append(p)
-            
-            # ORDENACIÓN
-            if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
-                picks_ordenados = sorted(picks_finales, key=lambda x: x["Stake_1_10"], reverse=True)
-                mensaje_exito = f"Se han filtrado {len(picks_ordenados)} picks de Valor Real (EV+)."
-            elif criterio_orden == "📊 Alta Probabilidad (>65%)":
-                picks_ordenados = sorted(picks_finales, key=lambda x: x["Prob"], reverse=True)
-                mensaje_exito = f"Mostrando {len(picks_ordenados)} selecciones de alta probabilidad estadística."
-            else:
-                picks_ordenados = sorted(picks_finales, key=lambda x: (x["Stake_1_10"], x["Prob"]), reverse=True)
-                mensaje_exito = f"El Santo Grial: {len(picks_ordenados)} picks que combinan rentabilidad matemática (EV+) y seguridad (>65%)."
+                    if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
+            # 2. CÁLCULO DEL STAKE IDEAL ABSOLUTO CON KELLY DINÁMICO
+            for p in picks_pre_filtrados:
+                b = p["Cuota"] - 1.0
+                full_kelly = p["EV"] / b if b > 0 else 0
+                
+                # --- EL MOTOR DE KELLY DINÁMICO ---
+                # Base del 5% + un extra basado en la probabilidad de acierto.
+                multiplicador_kelly = 0.05 + (p["Prob"] * 0.12)
+                
+                kelly_fraccional = full_kelly * multiplicador_kelly 
+                p["Stake_Pct_Ideal"] = kelly_fraccional * 100
+
+            # 3. ASIGNACIÓN TOP-DOWN (Ordenamos por la rentabilidad matemática pura)
+            picks_pre_filtrados.sort(key=lambda x: x["Stake_Pct_Ideal"], reverse=True)
+
+            # 4. DISTRIBUCIÓN DE EXPOSICIÓN Y CREACIÓN DE ESCALA 1-10 ESTRICTA
+            exposicion_acumulada = 0.0
+            
+            for p in picks_pre_filtrados:
+                # Capamos el stake máximo de un pick individual al 2.5% del bankroll
+                stake_pct = min(p["Stake_Pct_Ideal"], 2.5)
+                
+                # Si este pick supera el límite de riesgo diario, cortamos el grifo
+                if exposicion_acumulada + stake_pct > max_exposure:
+                    remanente = max_exposure - exposicion_acumulada
+                    if remanente >= 0.25: # Si queda espacio para al menos un Stake 1/10
+                        stake_pct = remanente
+                    else:
+                        break # Cortamos iteración, descartamos los picks restantes de menor valor
+                
+                # Conversión estricta a Stakes 1-10 redondos (1 Unidad = 0.25% del Bank)
+                stake_1_10 = int(round(stake_pct / 0.25))
+                stake_1_10 = max(1, min(10, stake_1_10)) # Aseguramos que nunca salga del rango 1-10
+                
+                stake_eur = (stake_pct / 100.0) * bankroll_actual
+                
+                if stake_eur >= APUESTA_MINIMA_EUROS:
+                    p["Stake_1_10"] = stake_1_10
+                    p["Stake_Eur"] = round(stake_eur, 2)
+                    exposicion_acumulada += stake_pct
+                    picks_finales.append(p)
+
+            picks_ordenados = picks_finales # Ya salen perfectamente ordenados de fábrica
+
+            # --- RENDERIZADO DE INTERFAZ ---
             if picks_ordenados:
+                if criterio_orden == "💰 Mayor Rentabilidad (EV+)":
+                    mensaje_exito = f"Se han filtrado {len(picks_ordenados)} picks de Valor Real (EV+)."
+                elif criterio_orden == "📊 Alta Probabilidad (>65%)":
+                    mensaje_exito = f"Mostrando {len(picks_ordenados)} selecciones de alta probabilidad."
+                else:
+                    mensaje_exito = f"El Santo Grial: {len(picks_ordenados)} picks de pura Élite Matemática."
+
                 st.success(mensaje_exito)
                 
                 total_paginas = math.ceil(len(picks_ordenados) / ITEMS_POR_PAGINA)
@@ -417,18 +496,33 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 fin_idx = inicio_idx + ITEMS_POR_PAGINA
                 picks_pagina = picks_ordenados[inicio_idx:fin_idx]
                 
+                picks_historicos = obtener_picks_historicos()
+                if 'picks_registrados' not in st.session_state: st.session_state.picks_registrados = set()
+                
+                def registrar_accion(f_id, partido, mercado, cuota, stake, prob, key_interna):
+                    guardar_pick(f_id, partido, mercado, cuota, stake, prob)
+                    st.session_state.picks_registrados.add(key_interna)
+
                 for idx, pick in enumerate(picks_pagina, start=inicio_idx+1):
                     with st.container():
-                        # UI Simplificada y adaptada para solo mostrar Stake 1-10
-                        cc1, cc2, cc3, cc4 = st.columns([3, 2.5, 1.5, 2])
+                        cc1, cc2, cc3, cc4, cc5 = st.columns([3, 2, 1.5, 2, 1.5])
                         cc1.write(f"⚽ **{pick['Partido']}**")
                         cc2.write(f"🎯 **{pick['Mercado']}** (Cuota: {pick['Cuota']})")
                         cc3.write(f"📊 Prob: **{pick['Prob']*100:.1f}%**")
                         
-                        if pick['Tiene_Valor'] and pick['Stake_1_10'] >= 1:
-                            cc4.write(f"🔥 Stake: **{pick['Stake_1_10']}/10**")
+                        pick_key_ui = f"{pick['f_id']}_{pick['Mercado']}_{idx}"
+                        pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
+                        ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
+
+                        # Actualizado para mostrar el Stake 1/10 en grande
+                        cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10** (€{pick['Stake_Eur']:.2f})")
+                            
+                        if ya_registrado:
+                            cc5.button("✅ Guardado", key=f"btn_{pick_key_ui}", disabled=True)
                         else:
-                            cc4.write("⚠️ *Sin Valor Matemático*")
+                            cc5.button("Registrar Pick", key=f"btn_{pick_key_ui}", 
+                                       on_click=registrar_accion, 
+                                       args=(pick['f_id'], pick['Partido'], pick['Mercado'], pick['Cuota'], pick['Stake_Eur'], pick['Prob'], pick_key_ui))
                         
                         with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
                             datos_crudos = f"""**DATOS DEL PARTIDO**
@@ -437,24 +531,16 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
 - **Horario:** {pick['Fecha_Hora']}
 - **Mercado Recomendado:** {pick['Mercado']}
 - **Cuota Casa de Apuestas:** {pick['Cuota']}
-- **Stake Recomendado (1-10):** {max(1, pick['Stake_1_10'])}/10
+- **Stake Recomendado:** {pick['Stake_1_10']}/10
 - **Probabilidad Real (Modelo):** {pick['Prob']*100:.1f}%
 - **Valor Esperado (EV+):** {pick['EV']*100:.1f}%
-
-**MÉTRICAS INTERNAS (Fuerza Relativa y Goles Esperados)**
-- **xG (Goles Esperados):** Local {pick['xG_loc']:.2f} | Visitante {pick['xG_vis']:.2f}
-- **Rendimiento Local:** Fuerza Ofensiva {pick['FA_H']:.2f} | Fuerza Defensiva {pick['FD_H']:.2f}
-- **Rendimiento Visitante:** Fuerza Ofensiva {pick['FA_A']:.2f} | Fuerza Defensiva {pick['FD_A']:.2f}
-*(Nota: Valores de Fuerza > 1.0 indican rendimiento superior a la media de la liga)*
 """
                             st.code(datos_crudos, language="markdown")
-                            st.caption("Copia este bloque de texto usando el icono de arriba a la derecha y pégalo en tu IA junto con el Prompt Maestro.")
-                        
                         st.divider()
             else:
-                st.warning("No hay resultados que superen los filtros de rentabilidad y probabilidad a la vez. Prueba a bajar tus exigencias o cambiar de día.")
+                st.warning("No hay resultados que superen los filtros de rentabilidad y probabilidad hoy. El capital descansa.")
         else:
-            st.warning("El modelo no encontró ningún pick relevante para hoy.")
+            st.warning("El modelo no encontró ningún pick relevante.")
 
 elif modo_vista == "2️⃣ Explorador de Ligas":
     st.title(f"🌍 Próxima Jornada: {liga_sel} ({pais_sel})")
