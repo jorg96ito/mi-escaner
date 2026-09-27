@@ -11,7 +11,7 @@ import os
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V18.7 | Strict Stake Control", layout="wide")
+st.set_page_config(page_title="Quant Pro V19 | Continuous Math & No-Euro UI", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -21,7 +21,7 @@ ITEMS_POR_PAGINA = 10
 PAISES_LIGAS = {
     "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
     "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
-    "Italia": {"Serie A": 135, "Serie B": 136, "Serie C": 137, "Serie A Femminile": 139},
+    "Italia": {"Serie A": 135, "Serie B": 136, "Serie C": 137},
     "Alemania": {"1. Bundesliga": 78, "2. Bundesliga": 79, "3. Liga": 80, "Reg. Nord": 81, "Reg. Nordost": 82, "Reg. West": 83, "Reg. Südwest": 84, "Reg. Bayern": 85},
     "Francia": {"Ligue 1": 61, "Ligue 2": 62, "National": 63},
     "Paises Bajos": {"Eredivisie": 88, "Eerste Divisie": 89},
@@ -80,7 +80,7 @@ PAISES_LIGAS = {
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
 # ---------------------------------------------------------
-# 2. SISTEMA DE TRACKING MINIMALISTA (Solo guarda el ID para no repetir)
+# 2. SISTEMA DE TRACKING MINIMALISTA 
 # ---------------------------------------------------------
 TRACKER_FILE = "tracking_apuestas.csv"
 
@@ -113,6 +113,7 @@ def obtener_picks_historicos():
 # ---------------------------------------------------------
 # 3. MOTORES MATEMÁTICOS AFINADOS
 # ---------------------------------------------------------
+
 def limpiar_nombre(texto): 
     return re.sub(r'\b(fc|cf|ud|sd|cd|real|1\.)\b', '', (texto or "").lower()).strip()
 
@@ -121,93 +122,48 @@ def calcular_momentum_sigmoideo(form_str):
     pesos = {'W': 3, 'D': 1, 'L': 0}
     puntos_ponderados = 0.0
     peso_total = 0.0
+    
     for i, res in enumerate(reversed(form_str[-5:])):
         decay = 0.75 ** i 
         puntos_ponderados += pesos.get(res, 1) * decay
         peso_total += 3 * decay 
+        
     ratio_rendimiento = puntos_ponderados / peso_total if peso_total > 0 else 0.33
     z = (ratio_rendimiento - 0.5) * 4 
-    return 1.0 + (math.tanh(z) * 0.15)
+    momentum = 1.0 + (math.tanh(z) * 0.15)
+    return momentum
 
 def desviggar_cuotas_shin_aproximado(cuotas_dict, keys):
     if not all(k in cuotas_dict for k in keys): return {}
     inv_odds = [1.0 / cuotas_dict[k] for k in keys]
     margin = sum(inv_odds) - 1.0
+    
     if margin <= 0: return {f"TrueProb_{k}": p for k, p in zip(keys, inv_odds)}
+    
     cuotas_reales = {}
     temp_probs = []
+    
     for p in inv_odds:
         true_p_approx = p - (margin * (p ** 1.5) / sum(x ** 1.5 for x in inv_odds))
         temp_probs.append(true_p_approx)
+        
     for i, k in enumerate(keys):
         norm_p = max(0.001, temp_probs[i] / sum(temp_probs)) 
         cuotas_reales[f"TrueProb_{k}"] = norm_p
         cuotas_reales[f"TrueOdd_{k}"] = 1.0 / norm_p
+        
     return cuotas_reales
 
-@st.cache_data(ttl=3600)
-def obtener_fuerzas_liga(league_id):
-    temp = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
-    url = f"https://v3.football.api-sports.io/standings?league={league_id}&season={temp}"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=8).json()
-        if not res.get("response"): return {}, {}
-        standings = res["response"][0]["league"]["standings"][0]
-        pj_totales = sum(t["all"]["played"] for t in standings) / 2
-        if pj_totales == 0: return {}, {}
-        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / sum(t["home"]["played"] for t in standings))
-        avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / sum(t["away"]["played"] for t in standings))
-        stats_eq = {}
-        for t in standings:
-            nom = limpiar_nombre(t["team"]["name"])
-            mom = calcular_momentum_sigmoideo(t.get("form", ""))
-            hl_pj, hl_gf, hl_gc = t["home"]["played"], t["home"]["goals"]["for"], t["home"]["goals"]["against"]
-            aw_pj, aw_gf, aw_gc = t["away"]["played"], t["away"]["goals"]["for"], t["away"]["goals"]["against"]
-            K = max(1.0, 10.0 - (hl_pj * 0.5)) 
-            fa_l = (((hl_gf + K * avg_g_loc) / (hl_pj + K)) / avg_g_loc) * mom
-            fd_l = (((hl_gc + K * avg_g_vis) / (hl_pj + K)) / avg_g_vis) / mom
-            fa_v = (((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis) * mom
-            fd_v = (((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc) / mom
-            stats_eq[nom] = {"FA_H": fa_l, "FD_H": fd_l, "FA_A": fa_v, "FD_A": fd_v}
-        return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
-    except: return {}, {}
+def desviggar_2way(cuota_fav, cuota_underdog):
+    if not cuota_fav or not cuota_underdog: return 0.0
+    inv_fav, inv_und = 1.0 / cuota_fav, 1.0 / cuota_underdog
+    margin = inv_fav + inv_und - 1.0
+    if margin <= 0: return inv_fav
+    true_fav = inv_fav - (margin * (inv_fav**1.5) / (inv_fav**1.5 + inv_und**1.5))
+    true_und = inv_und - (margin * (inv_und**1.5) / (inv_fav**1.5 + inv_und**1.5))
+    return max(0.001, true_fav / (true_fav + true_und))
 
-def matriz_dixon_coles_normalizada(xg_l, xg_v):
-    xg_tot = xg_l + xg_v
-    rho = -0.15 if xg_tot < 2.2 else (-0.12 if xg_tot < 2.8 else -0.09)
-    matriz = np.zeros((10, 10))
-    for g_l in range(10):
-        for g_v in range(10):
-            p_base = poisson.pmf(g_l, xg_l) * poisson.pmf(g_v, xg_v)
-            adj = 1.0
-            if g_l == 0 and g_v == 0: adj = 1.0 - xg_l * xg_v * rho
-            elif g_l == 0 and g_v == 1: adj = 1.0 + xg_l * rho
-            elif g_l == 1 and g_v == 0: adj = 1.0 + xg_v * rho
-            elif g_l == 1 and g_v == 1: adj = 1.0 - rho
-            matriz[g_l, g_v] = max(0.0, p_base * adj)
-    return matriz / np.sum(matriz)
-
-def calcular_mercados(xg_l, xg_v):
-    matriz = matriz_dixon_coles_normalizada(xg_l, xg_v)
-    p_1 = np.sum(np.tril(matriz, -1)) 
-    p_x = np.sum(np.diag(matriz))      
-    p_2 = np.sum(np.triu(matriz, 1))  
-    p_ov25 = sum(matriz[g_l, g_v] for g_l in range(10) for g_v in range(10) if (g_l + g_v) > 2.5)
-    p_btts = np.sum(matriz[1:, 1:])
-    return {'1': p_1, 'X': p_x, '2': p_2}, p_ov25, p_btts
-
-def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
-    xg_total = xg_l + xg_v
-    desigualdad = abs(prob_1x2['1'] - prob_1x2['2'])
-    exp_corners = (8.0 + (xg_total * 0.7) - (desigualdad * 1.5)) * ritmo_partido
-    v = exp_corners + (0.08 * exp_corners**2) 
-    n = (exp_corners**2) / (v - exp_corners)
-    p_ov95c = 1.0 - nbinom.cdf(9, n, exp_corners / v) if exp_corners < v else 0.5
-    tension = prob_1x2['X'] * 3.0 
-    exp_tarjetas = 3.2 + (tension) * ritmo_partido
-    p_ov45t = 1.0 - poisson.cdf(4, exp_tarjetas)
-    return p_ov95c, p_ov45t
-
+@st.cache_data(ttl=600)
 def obtener_cuotas_partido(fixture_id):
     url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}&bookmaker=8"
     try:
@@ -223,17 +179,110 @@ def obtener_cuotas_partido(fixture_id):
                 elif market["name"] == "Goals Over/Under":
                     for val in market["values"]:
                         if val["value"] == "Over 2.5": cuotas["O25"] = float(val["odd"])
+                        elif val["value"] == "Under 2.5": cuotas["U25"] = float(val["odd"])
                 elif market["name"] == "Both Teams Score":
                     for val in market["values"]:
-                        if val["value"] == "Yes": cuotas["BTTS"] = float(val["odd"])
-                elif "Corners Over Under" in market["name"] or "Corners" in market["name"]:
+                        if val["value"] == "Yes": cuotas["BTTS_Y"] = float(val["odd"])
+                        elif val["value"] == "No": cuotas["BTTS_N"] = float(val["odd"])
+                elif "Corners" in market["name"]:
                     for val in market["values"]:
                         if "Over 9.5" in str(val["value"]): cuotas["O95C"] = float(val["odd"])
-                elif "Cards Over/Under" in market["name"] or "Cards" in market["name"]:
-                    for val in market["values"]:
-                        if "Over 4.5" in str(val["value"]): cuotas["O45T"] = float(val["odd"])
+                        if "Under 9.5" in str(val["value"]): cuotas["U95C"] = float(val["odd"])
         return cuotas
     except: return {}
+
+@st.cache_data(ttl=3600)
+def obtener_fuerzas_liga(league_id):
+    temp = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
+    url = f"https://v3.football.api-sports.io/standings?league={league_id}&season={temp}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=8).json()
+        if not res.get("response"): return {}, {}
+        standings = res["response"][0]["league"]["standings"][0]
+        pj_totales = sum(t["all"]["played"] for t in standings) / 2
+        if pj_totales == 0: return {}, {}
+        
+        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / sum(t["home"]["played"] for t in standings))
+        avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / sum(t["away"]["played"] for t in standings))
+        
+        stats_eq = {}
+        
+        for t in standings:
+            nom = limpiar_nombre(t["team"]["name"])
+            mom = calcular_momentum_sigmoideo(t.get("form", ""))
+            
+            hl_pj, hl_gf, hl_gc = t["home"]["played"], t["home"]["goals"]["for"], t["home"]["goals"]["against"]
+            aw_pj, aw_gf, aw_gc = t["away"]["played"], t["away"]["goals"]["for"], t["away"]["goals"]["against"]
+            
+            K = max(1.0, 10.0 - (hl_pj * 0.5)) 
+            
+            fa_l = (((hl_gf + K * avg_g_loc) / (hl_pj + K)) / avg_g_loc) * mom
+            fd_l = (((hl_gc + K * avg_g_vis) / (hl_pj + K)) / avg_g_vis) / mom
+            fa_v = (((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis) * mom
+            fd_v = (((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc) / mom
+            
+            stats_eq[nom] = {"FA_H": fa_l, "FD_H": fd_l, "FA_A": fa_v, "FD_A": fd_v}
+        return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
+    except: return {}, {}
+
+def matriz_dixon_coles_normalizada(xg_l, xg_v):
+    xg_tot = xg_l + xg_v
+    
+    # Rho Continuo (Decaimiento Exponencial)
+    rho = -0.25 * math.exp(-0.25 * xg_tot) 
+    
+    matriz = np.zeros((10, 10))
+    for g_l in range(10):
+        for g_v in range(10):
+            p_base = poisson.pmf(g_l, xg_l) * poisson.pmf(g_v, xg_v)
+            
+            adj = 1.0
+            if g_l == 0 and g_v == 0: adj = 1.0 - xg_l * xg_v * rho
+            elif g_l == 0 and g_v == 1: adj = 1.0 + xg_l * rho
+            elif g_l == 1 and g_v == 0: adj = 1.0 + xg_v * rho
+            elif g_l == 1 and g_v == 1: adj = 1.0 - rho
+            
+            matriz[g_l, g_v] = max(0.0, p_base * adj)
+            
+    suma_matriz = np.sum(matriz)
+    return matriz / suma_matriz
+
+def calcular_mercados(xg_l, xg_v):
+    matriz = matriz_dixon_coles_normalizada(xg_l, xg_v)
+    
+    p_1 = np.sum(np.tril(matriz, -1)) 
+    p_x = np.sum(np.diag(matriz))      
+    p_2 = np.sum(np.triu(matriz, 1))  
+    
+    p_ov25 = 0.0
+    for g_l in range(10):
+        for g_v in range(10):
+            if (g_l + g_v) > 2.5:
+                p_ov25 += matriz[g_l, g_v]
+                
+    p_btts = np.sum(matriz[1:, 1:])
+    return {'1': p_1, 'X': p_x, '2': p_2}, p_ov25, p_btts
+
+def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
+    xg_total = xg_l + xg_v
+    
+    # Tensión Real Matemática
+    desigualdad = abs(prob_1x2['1'] - prob_1x2['2'])
+    tension_real = 1.0 - desigualdad
+    
+    exp_corners = 8.0 + (xg_total * 0.7) - (desigualdad * 1.5)
+    exp_corners *= ritmo_partido
+    
+    v = exp_corners + (0.08 * exp_corners**2) 
+    n = (exp_corners**2) / (v - exp_corners)
+    p_nbinom = exp_corners / v
+    p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom) if exp_corners < v else 0.5
+
+    # Tarjetas guiadas puramente por la tensión real del partido y el ritmo
+    exp_tarjetas = 3.0 + (tension_real * 2.5) * ritmo_partido
+    p_ov45t = 1.0 - poisson.cdf(4, exp_tarjetas)
+    
+    return p_ov95c, p_ov45t
 
 @st.cache_data(ttl=1800)
 def cargar_datos_jornada(fecha):
@@ -287,7 +336,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         st.session_state.pagina_actual = 1 
         partidos = cargar_datos_jornada(fecha_calc)
         if not partidos:
-            st.info("No hay partidos programados en las más de 110 ligas configuradas para este día.")
+            st.info("No hay partidos programados en las ligas configuradas para este día.")
             st.session_state.raw_picks = [] 
         else:
             ligas_activas = list(set([p["league"]["id"] for p in partidos]))
@@ -305,6 +354,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 f_id = p["fixture"]["id"]
                 lid = p["league"]["id"]
                 loc, vis = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
+                
                 liga_nombre = p["league"]["name"]
                 pais_nombre = p["league"]["country"]
                 
@@ -323,18 +373,23 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 
                 prob_1x2, p_ov25, p_btts = calcular_mercados(xG_loc, xG_vis)
                 p_ov95c, p_ov45t = calcular_corners_y_tarjetas(xG_loc, xG_vis, prob_1x2, ritmo_partido)
+                
                 cuotas = obtener_cuotas_partido(f_id)
                 
+                # Desvigueo riguroso para TODOS los mercados
                 cuotas_desviggadas = desviggar_cuotas_shin_aproximado(cuotas, ["1", "X", "2"])
+                prob_real_o25 = desviggar_2way(cuotas.get("O25"), cuotas.get("U25"))
+                prob_real_btts = desviggar_2way(cuotas.get("BTTS_Y"), cuotas.get("BTTS_N"))
+                prob_real_o95c = desviggar_2way(cuotas.get("O95C"), cuotas.get("U95C"))
                 
                 mercados = [
                     ("Local (1)", prob_1x2['1'], cuotas.get("1", 0), cuotas_desviggadas.get("TrueProb_1", 0)),
                     ("Empate (X)", prob_1x2['X'], cuotas.get("X", 0), cuotas_desviggadas.get("TrueProb_X", 0)),
                     ("Visitante (2)", prob_1x2['2'], cuotas.get("2", 0), cuotas_desviggadas.get("TrueProb_2", 0)),
-                    ("Over 2.5 Goles", p_ov25, cuotas.get("O25", 0), 0),
-                    ("Ambos Marcan (Sí)", p_btts, cuotas.get("BTTS", 0), 0),
-                    ("Over 9.5 Córners", p_ov95c, cuotas.get("O95C", 0), 0),
-                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0)
+                    ("Over 2.5 Goles", p_ov25, cuotas.get("O25", 0), prob_real_o25),
+                    ("Ambos Marcan (Sí)", p_btts, cuotas.get("BTTS_Y", 0), prob_real_btts),
+                    ("Over 9.5 Córners", p_ov95c, cuotas.get("O95C", 0), prob_real_o95c),
+                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0) # Difícil desviggar sin opuestas exactas
                 ]
 
                 for n_merc, p_real, cuota, p_real_casa in mercados:
@@ -372,33 +427,38 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
                     if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
-            # --- NUEVO CÁLCULO DE STAKE (ANTI ANOMALÍAS) ---
+            # --- CÁLCULO DE STAKE QUANT (KELLY CON SHRINKAGE ENTRÓPICO) ---
             for p in picks_pre_filtrados:
-                # 1. Capamos el EV al 30% para evitar explosiones matemáticas por datos raros
-                safe_ev = min(p["EV"], 0.30)
-                b = p["Cuota"] - 1.0
-                full_kelly = safe_ev / b if b > 0 else 0
+                # Shrinkage Logarítmico (Penalización justa por varianza)
+                penalizacion_entropica = 0.01 + (math.log(p["Cuota"]) * 0.02)
+                prob_conservadora = p["Prob"] * (1.0 - penalizacion_entropica)
                 
-                # 2. Multiplicador base dinámico
-                multiplicador_kelly = 0.05 + (p["Prob"] * 0.12)
+                # Recalculamos EV con la probabilidad penalizada inteligente
+                ev_ajustado = (prob_conservadora * p["Cuota"]) - 1.0
                 
-                # 3. Penalizador estricto para cuotas altas
-                if p["Cuota"] >= 4.0:
-                    multiplicador_kelly *= 0.25
-                elif p["Cuota"] >= 3.0:
-                    multiplicador_kelly *= 0.50
-                elif p["Cuota"] >= 2.0:
-                    multiplicador_kelly *= 0.85
-                
-                kelly_fraccional = full_kelly * multiplicador_kelly 
-                p["Stake_Pct_Ideal"] = kelly_fraccional * 100
+                if ev_ajustado > 0:
+                    b = p["Cuota"] - 1.0
+                    full_kelly = ev_ajustado / b
+                    
+                    # Suavizado Exponencial del Kelly
+                    multiplicador_dinamico = 0.25 / (p["Cuota"] ** 0.6)
+                    
+                    # Capamos al 25% absoluto
+                    multiplicador_dinamico = min(multiplicador_dinamico, 0.25)
+                    
+                    kelly_fraccional = full_kelly * multiplicador_dinamico 
+                    p["Stake_Pct_Ideal"] = kelly_fraccional * 100
+                else:
+                    p["Stake_Pct_Ideal"] = 0.0
 
+            # Filtramos aquellos que tras el margen de seguridad logarítmico perdieron su EV
+            picks_pre_filtrados = [p for p in picks_pre_filtrados if p["Stake_Pct_Ideal"] > 0]
             picks_pre_filtrados.sort(key=lambda x: x["Stake_Pct_Ideal"], reverse=True)
 
             exposicion_acumulada = 0.0
             
             for p in picks_pre_filtrados:
-                stake_pct = min(p["Stake_Pct_Ideal"], 2.5)
+                stake_pct = min(p["Stake_Pct_Ideal"], 2.5) 
                 
                 if exposicion_acumulada + stake_pct > max_exposure:
                     remanente = max_exposure - exposicion_acumulada
@@ -463,7 +523,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                         pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
                         ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
 
-                        # UI LIMPÍA: Sin rastro de euros
                         cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10**")
                             
                         if ya_registrado:
