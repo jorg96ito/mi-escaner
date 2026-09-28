@@ -6,12 +6,11 @@ from datetime import datetime, timedelta
 import pandas as pd
 import re
 import math
-import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.2 | Ultimate Guardrails & Tamed Kelly", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.3 | Telegram Ready & Dynamic Dates", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -79,39 +78,10 @@ PAISES_LIGAS = {
 
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
-# ---------------------------------------------------------
-# 2. SISTEMA DE TRACKING MINIMALISTA 
-# ---------------------------------------------------------
-TRACKER_FILE = "tracking_apuestas.csv"
-
-def init_tracker():
-    if not os.path.exists(TRACKER_FILE):
-        df = pd.DataFrame(columns=["Fixture_ID", "Mercado"])
-        df.to_csv(TRACKER_FILE, index=False)
-
-def guardar_pick(fixture_id, mercado):
-    df = pd.read_csv(TRACKER_FILE)
-    nuevo = pd.DataFrame([{"Fixture_ID": str(fixture_id), "Mercado": mercado}])
-    df = pd.concat([df, nuevo], ignore_index=True)
-    df.to_csv(TRACKER_FILE, index=False)
-    st.toast("✅ Pick marcado como registrado")
-
-def obtener_picks_historicos():
-    init_tracker()
-    try:
-        df = pd.read_csv(TRACKER_FILE)
-        if df.empty: return set()
-        historico = set()
-        for _, row in df.iterrows():
-            try: fid = str(int(float(row["Fixture_ID"])))
-            except: fid = str(row["Fixture_ID"]).strip()
-            merc = str(row["Mercado"]).strip()
-            historico.add(f"{fid}_{merc}")
-        return historico
-    except: return set()
+# ELIMINADO: Todo el sistema de tracking (ahorrando memoria y procesos)
 
 # ---------------------------------------------------------
-# 3. MOTORES MATEMÁTICOS AFINADOS
+# 2. MOTORES MATEMÁTICOS AFINADOS
 # ---------------------------------------------------------
 
 def limpiar_nombre(texto): 
@@ -221,8 +191,6 @@ def obtener_fuerzas_liga(league_id):
             fa_v = (((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis) * mom
             fd_v = (((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc) / mom
             
-            # 🚧 BARRERA 1: Capamos las fuerzas. Ningún equipo puede ser 3 veces mejor que 
-            # la media, ni infinitamente malo. Evita divisiones por cero o explosiones.
             stats_eq[nom] = {
                 "FA_H": min(max(fa_l, 0.3), 3.0), 
                 "FD_H": min(max(fd_l, 0.3), 3.0), 
@@ -234,8 +202,6 @@ def obtener_fuerzas_liga(league_id):
 
 def matriz_dixon_coles_normalizada(xg_l, xg_v):
     xg_tot = xg_l + xg_v
-    
-    # Rho Continuo (Decaimiento Exponencial)
     rho = -0.25 * math.exp(-0.25 * xg_tot) 
     
     matriz = np.zeros((10, 10))
@@ -272,8 +238,6 @@ def calcular_mercados(xg_l, xg_v):
 
 def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
     xg_total = xg_l + xg_v
-    
-    # Tensión Real Matemática
     desigualdad = abs(prob_1x2['1'] - prob_1x2['2'])
     tension_real = 1.0 - desigualdad
     
@@ -285,7 +249,6 @@ def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
     p_nbinom = exp_corners / v
     p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom) if exp_corners < v else 0.5
 
-    # Tarjetas guiadas puramente por la tensión real del partido y el ritmo
     exp_tarjetas = 3.0 + (tension_real * 2.5) * ritmo_partido
     p_ov45t = 1.0 - poisson.cdf(4, exp_tarjetas)
     
@@ -307,7 +270,7 @@ def cargar_proxima_jornada_liga(league_id):
     except: return []
 
 # ---------------------------------------------------------
-# 4. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
+# 3. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
 # ---------------------------------------------------------
 modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas"])
 
@@ -320,9 +283,24 @@ id_liga_explorador = PAISES_LIGAS[pais_sel][liga_sel]
 if modo_vista == "1️⃣ Escáner General (Jornada)":
     st.title("🤖 Escáner Cuantitativo & Extractor Data")
     
-    dias = {"Hoy": 0, "Mañana": 1, "Pasado": 2}
+    # --- GENERADOR DINÁMICO DE FECHAS (4 DÍAS) ---
+    dias_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    hoy = datetime.now()
+    opciones_dias = {}
+    
+    for i in range(4):
+        fecha_iter = hoy + timedelta(days=i)
+        dia_str = dias_es[fecha_iter.weekday()]
+        num_dia = fecha_iter.day
+        
+        if i == 0: nombre_opcion = f"Hoy {dia_str} {num_dia}"
+        elif i == 1: nombre_opcion = f"Mañana {dia_str} {num_dia}"
+        else: nombre_opcion = f"{dia_str.capitalize()} {num_dia}"
+        
+        opciones_dias[nombre_opcion] = i
+    
     c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
-    dia_sel = c_dia.selectbox("Día", list(dias.keys()))
+    dia_sel = c_dia.selectbox("Día", list(opciones_dias.keys()))
     
     max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 5, 30, 15)
     
@@ -334,7 +312,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         "📊 Alta Probabilidad (>65%)"
     ], on_change=reset_pagina)
     
-    fecha_calc = (datetime.now() + timedelta(days=dias[dia_sel])).strftime("%Y-%m-%d")
+    fecha_calc = (datetime.now() + timedelta(days=opciones_dias[dia_sel])).strftime("%Y-%m-%d")
     
     if 'raw_picks' not in st.session_state: st.session_state.raw_picks = None
     if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 1
@@ -375,8 +353,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 sv = stats_liga.get(lid, {}).get(limpiar_nombre(vis), {"FA_A": 1.0, "FD_A": 1.0})
                 ritmo_partido = 1.0 + ((sl["FA_H"] + sv["FA_A"] - 2.0) * 0.15)
                 
-                # 🚧 BARRERA 2: Capar los Goles Esperados (xG) a un máximo de 3.5.
-                # Si el modelo calcula 7 goles esperados por un bug de la API, lo frena aquí.
                 xG_loc_raw = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5) * ritmo_partido
                 xG_vis_raw = sv["FA_A"] * sl["FD_H"] * medias_liga.get(lid, {}).get("avg_away", 1.2) * ritmo_partido
                 
@@ -388,7 +364,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 
                 cuotas = obtener_cuotas_partido(f_id)
                 
-                # Desvigueo riguroso para TODOS los mercados
                 cuotas_desviggadas = desviggar_cuotas_shin_aproximado(cuotas, ["1", "X", "2"])
                 prob_real_o25 = desviggar_2way(cuotas.get("O25"), cuotas.get("U25"))
                 prob_real_btts = desviggar_2way(cuotas.get("BTTS_Y"), cuotas.get("BTTS_N"))
@@ -409,23 +384,23 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                         ev = (p_real * cuota) - 1
                         ev_valido = True
                         
-                        # Filtro de cuotas desviggadas (evita arbitrajes falsos)
                         if p_real_casa > 0 and (p_real - p_real_casa) < 0.005:
                             ev_valido = False
                             
-                        # 🚧 BARRERA 3: Anclaje al mercado (Market Implied Check)
-                        # Si el EV es mayor al 45% (0.45), el modelo asume que las casas de apuestas 
-                        # saben algo que él no (lesionados, suplentes, errores API) y anula el pick.
                         if ev > 0.45:
                             ev_valido = False
                             
                         tiene_valor = (ev > 0.025 and ev_valido)
                         
                         if tiene_valor or (p_real >= 0.65 and ev_valido):
+                            # Añadimos variables métricas al diccionario para el prompt IA
                             raw_picks_temp.append({
                                 "f_id": f_id, "Partido": f"{loc} vs {vis}", "Mercado": n_merc,
                                 "Prob": p_real, "Cuota": cuota, "EV": ev, "Tiene_Valor": tiene_valor,
-                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str
+                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str,
+                                "xG_loc": xG_loc, "xG_vis": xG_vis, 
+                                "FA_H": sl["FA_H"], "FD_H": sl["FD_H"],
+                                "FA_A": sv["FA_A"], "FD_A": sv["FD_A"]
                             })
                 bar.progress((i+1)/len(partidos))
             bar.empty()
@@ -447,35 +422,21 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 elif criterio_orden == "🏆 Picks Definitivos (EV+ y >65%)":
                     if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
-            # --- CÁLCULO DE STAKE QUANT (KELLY CON SHRINKAGE AGRESIVO) ---
             for p in picks_pre_filtrados:
-                # 📉 FIX 1: Shrinkage de Riesgo (Protección brutal contra Underdogs)
-                # En lugar de restar un % fijo logarítmico, dividimos la probabilidad. 
-                # Cuota 1.5 -> Reduce ~2.5% | Cuota 3.0 -> Reduce ~10% | Cuota 6.5 -> Reduce ~27%
                 factor_castigo = 1.0 + (0.05 * (p["Cuota"] - 1.0))
                 prob_conservadora = p["Prob"] / factor_castigo
-                
-                # Recalculamos EV con la probabilidad severamente penalizada
                 ev_ajustado = (prob_conservadora * p["Cuota"]) - 1.0
                 
                 if ev_ajustado > 0:
                     b = p["Cuota"] - 1.0
                     full_kelly = ev_ajustado / b
-                    
-                    # 📉 FIX 2: Multiplicador Dinámico Conservador (Tamed Kelly)
-                    # Usamos una base máxima del 10% (0.10) de la fracción de Kelly.
-                    # Cuota 1.5 -> Multiplicador ~8.1% | Cuota 3.0 -> ~5.7% | Cuota 6.5 -> ~3.9%
                     multiplicador_dinamico = 0.10 / math.sqrt(p["Cuota"])
-                    
-                    # Límite estricto del multiplicador al 10% por seguridad del fondo
                     multiplicador_dinamico = min(multiplicador_dinamico, 0.10)
-                    
                     kelly_fraccional = full_kelly * multiplicador_dinamico 
                     p["Stake_Pct_Ideal"] = kelly_fraccional * 100
                 else:
                     p["Stake_Pct_Ideal"] = 0.0
 
-            # Filtramos aquellos que tras el margen de seguridad logarítmico perdieron su EV
             picks_pre_filtrados = [p for p in picks_pre_filtrados if p["Stake_Pct_Ideal"] > 0]
             picks_pre_filtrados.sort(key=lambda x: x["Stake_Pct_Ideal"], reverse=True)
 
@@ -529,44 +490,28 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 fin_idx = inicio_idx + ITEMS_POR_PAGINA
                 picks_pagina = picks_ordenados[inicio_idx:fin_idx]
                 
-                picks_historicos = obtener_picks_historicos()
-                if 'picks_registrados' not in st.session_state: st.session_state.picks_registrados = set()
-                
-                def registrar_accion(f_id, mercado, key_interna):
-                    guardar_pick(f_id, mercado)
-                    st.session_state.picks_registrados.add(key_interna)
-
                 for idx, pick in enumerate(picks_pagina, start=inicio_idx+1):
                     with st.container():
-                        cc1, cc2, cc3, cc4, cc5 = st.columns([3, 2, 1.5, 2, 1.5])
+                        # UI Limpia (eliminado el botón de guardar y ajustados los anchos)
+                        cc1, cc2, cc3, cc4 = st.columns([3.5, 2.5, 2, 2])
                         cc1.write(f"⚽ **{pick['Partido']}**")
                         cc2.write(f"🎯 **{pick['Mercado']}** (Cuota: {pick['Cuota']})")
                         cc3.write(f"📊 Prob: **{pick['Prob']*100:.1f}%**")
-                        
-                        pick_key_ui = f"{pick['f_id']}_{pick['Mercado']}_{idx}"
-                        pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
-                        ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
-
                         cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10**")
-                            
-                        if ya_registrado:
-                            cc5.button("✅ Guardado", key=f"btn_{pick_key_ui}", disabled=True)
-                        else:
-                            cc5.button("Registrar Pick", key=f"btn_{pick_key_ui}", 
-                                       on_click=registrar_accion, 
-                                       args=(pick['f_id'], pick['Mercado'], pick_key_ui))
                         
-                        with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
-                            datos_crudos = f"""**DATOS DEL PARTIDO**
-- **Partido:** {pick['Partido']}
-- **Competición:** {pick['Liga']} ({pick['Pais']})
-- **Horario:** {pick['Fecha_Hora']}
-- **Mercado Recomendado:** {pick['Mercado']}
-- **Cuota Casa de Apuestas:** {pick['Cuota']}
-- **Stake Recomendado:** {pick['Stake_1_10']}/10
-- **Probabilidad Real (Modelo):** {pick['Prob']*100:.1f}%
-- **Valor Esperado (EV+):** {pick['EV']*100:.1f}%
-"""
+                        # Generador automático del Prompt Experto (Cero IA/Matemáticas)
+                        with st.expander("📊 Generar Argumento Experto para Telegram (Copiar a IA)"):
+                            datos_crudos = f"""Analiza estos datos y dame 1 o 2 frases humanas y expertas justificando la apuesta. RECUERDA: No menciones EV, ni algoritmos, ni probabilidades exactas. Traduce los números a momento de forma y peligro ofensivo/defensivo.
+
+**Partido:** {pick['Partido']}
+**Competición:** {pick['Liga']} ({pick['Pais']})
+**Mercado a apostar:** {pick['Mercado']} a cuota {pick['Cuota']}
+
+**Datos para tu análisis mental (no los menciones literalmente):**
+- Goles Esperados (xG): Local {pick['xG_loc']:.2f} | Visitante {pick['xG_vis']:.2f}
+- Fuerza Ofensiva Local (FA_H): {pick['FA_H']:.2f} | Defensa Local (FD_H): {pick['FD_H']:.2f}
+- Fuerza Ofensiva Vis (FA_A): {pick['FA_A']:.2f} | Defensa Vis (FD_A): {pick['FD_A']:.2f}
+*(Nota: Valores de Fuerza > 1.0 indican mejor rendimiento que la media)*"""
                             st.code(datos_crudos, language="markdown")
                         st.divider()
             else:
