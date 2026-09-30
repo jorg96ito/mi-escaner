@@ -4,19 +4,18 @@ import numpy as np
 from scipy.stats import poisson, nbinom
 from datetime import datetime, timedelta
 import pandas as pd
-import re
 import math
+import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.3 | Telegram Ready & Dynamic Dates", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.2 | API Optimization & Math Shield", layout="wide")
 
-API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  # ⚠️ Tu clave de fútbol
+API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
 ITEMS_POR_PAGINA = 10
 
-# EXPANSIÓN GLOBAL: ~110 Ligas Domésticas
 PAISES_LIGAS = {
     "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
     "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
@@ -78,14 +77,40 @@ PAISES_LIGAS = {
 
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
-# ELIMINADO: Todo el sistema de tracking (ahorrando memoria y procesos)
+# ---------------------------------------------------------
+# 2. SISTEMA DE TRACKING MINIMALISTA 
+# ---------------------------------------------------------
+TRACKER_FILE = "tracking_apuestas.csv"
+
+def init_tracker():
+    if not os.path.exists(TRACKER_FILE):
+        df = pd.DataFrame(columns=["Fixture_ID", "Mercado"])
+        df.to_csv(TRACKER_FILE, index=False)
+
+def guardar_pick(fixture_id, mercado):
+    df = pd.read_csv(TRACKER_FILE)
+    nuevo = pd.DataFrame([{"Fixture_ID": str(fixture_id), "Mercado": mercado}])
+    df = pd.concat([df, nuevo], ignore_index=True)
+    df.to_csv(TRACKER_FILE, index=False)
+    st.toast("✅ Pick marcado como registrado")
+
+def obtener_picks_historicos():
+    init_tracker()
+    try:
+        df = pd.read_csv(TRACKER_FILE)
+        if df.empty: return set()
+        historico = set()
+        for _, row in df.iterrows():
+            try: fid = str(int(float(row["Fixture_ID"])))
+            except: fid = str(row["Fixture_ID"]).strip()
+            merc = str(row["Mercado"]).strip()
+            historico.add(f"{fid}_{merc}")
+        return historico
+    except: return set()
 
 # ---------------------------------------------------------
-# 2. MOTORES MATEMÁTICOS AFINADOS
+# 3. MOTORES MATEMÁTICOS AFINADOS
 # ---------------------------------------------------------
-
-def limpiar_nombre(texto): 
-    return re.sub(r'\b(fc|cf|ud|sd|cd|real|1\.)\b', '', (texto or "").lower()).strip()
 
 def calcular_momentum_sigmoideo(form_str):
     if not form_str: return 1.0
@@ -94,13 +119,13 @@ def calcular_momentum_sigmoideo(form_str):
     peso_total = 0.0
     
     for i, res in enumerate(reversed(form_str[-5:])):
-        decay = 0.75 ** i 
+        decay = 0.85 ** i 
         puntos_ponderados += pesos.get(res, 1) * decay
         peso_total += 3 * decay 
         
     ratio_rendimiento = puntos_ponderados / peso_total if peso_total > 0 else 0.33
     z = (ratio_rendimiento - 0.5) * 4 
-    momentum = 1.0 + (math.tanh(z) * 0.15)
+    momentum = 1.0 + (math.tanh(z) * 0.07)
     return momentum
 
 def desviggar_cuotas_shin_aproximado(cuotas_dict, keys):
@@ -134,79 +159,113 @@ def desviggar_2way(cuota_fav, cuota_underdog):
     return max(0.001, true_fav / (true_fav + true_und))
 
 @st.cache_data(ttl=600)
-def obtener_cuotas_partido(fixture_id):
-    url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}&bookmaker=8"
+def obtener_cuotas_jornada(fecha):
+    url = f"https://v3.football.api-sports.io/odds?date={fecha}&bookmaker=8"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=4).json()
-        cuotas = {}
-        if res.get("response"):
-            for market in res["response"][0]["bookmakers"][0]["bets"]:
-                if market["name"] == "Match Winner":
-                    for val in market["values"]:
-                        if val["value"] == "Home": cuotas["1"] = float(val["odd"])
-                        elif val["value"] == "Draw": cuotas["X"] = float(val["odd"])
-                        elif val["value"] == "Away": cuotas["2"] = float(val["odd"])
-                elif market["name"] == "Goals Over/Under":
-                    for val in market["values"]:
-                        if val["value"] == "Over 2.5": cuotas["O25"] = float(val["odd"])
-                        elif val["value"] == "Under 2.5": cuotas["U25"] = float(val["odd"])
-                elif market["name"] == "Both Teams Score":
-                    for val in market["values"]:
-                        if val["value"] == "Yes": cuotas["BTTS_Y"] = float(val["odd"])
-                        elif val["value"] == "No": cuotas["BTTS_N"] = float(val["odd"])
-                elif "Corners" in market["name"]:
-                    for val in market["values"]:
-                        if "Over 9.5" in str(val["value"]): cuotas["O95C"] = float(val["odd"])
-                        if "Under 9.5" in str(val["value"]): cuotas["U95C"] = float(val["odd"])
-        return cuotas
-    except: return {}
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        
+        if data.get("errors"):
+            st.error(f"Error de API (Cuotas): {data['errors']}")
+            return {}
+            
+        cuotas_globales = {}
+        if data.get("response"):
+            for match in data["response"]:
+                fid = match["fixture"]["id"]
+                cuotas = {}
+                for bookmaker in match.get("bookmakers", []):
+                    for market in bookmaker.get("bets", []):
+                        if market["name"] == "Match Winner":
+                            for val in market["values"]:
+                                if val["value"] == "Home": cuotas["1"] = float(val["odd"])
+                                elif val["value"] == "Draw": cuotas["X"] = float(val["odd"])
+                                elif val["value"] == "Away": cuotas["2"] = float(val["odd"])
+                        elif market["name"] == "Goals Over/Under":
+                            for val in market["values"]:
+                                if val["value"] == "Over 2.5": cuotas["O25"] = float(val["odd"])
+                                elif val["value"] == "Under 2.5": cuotas["U25"] = float(val["odd"])
+                        elif market["name"] == "Both Teams Score":
+                            for val in market["values"]:
+                                if val["value"] == "Yes": cuotas["BTTS_Y"] = float(val["odd"])
+                                elif val["value"] == "No": cuotas["BTTS_N"] = float(val["odd"])
+                        elif "Corners" in market["name"]:
+                            for val in market["values"]:
+                                if "Over 9.5" in str(val["value"]): cuotas["O95C"] = float(val["odd"])
+                                if "Under 9.5" in str(val["value"]): cuotas["U95C"] = float(val["odd"])
+                        elif "Cards" in market["name"] or "Tarjetas" in market["name"]:
+                            for val in market["values"]:
+                                if "Over 4.5" in str(val["value"]): cuotas["O45T"] = float(val["odd"])
+                                if "Under 4.5" in str(val["value"]): cuotas["U45T"] = float(val["odd"])
+                cuotas_globales[fid] = cuotas
+        return cuotas_globales
+    except requests.exceptions.RequestException as e:
+        st.error(f"Fallo de conexión al obtener cuotas: {e}")
+        return {}
+    except Exception as e:
+        st.error(f"Error procesando cuotas: {e}")
+        return {}
 
 @st.cache_data(ttl=3600)
 def obtener_fuerzas_liga(league_id):
     temp = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
     url = f"https://v3.football.api-sports.io/standings?league={league_id}&season={temp}"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=8).json()
-        if not res.get("response"): return {}, {}
-        standings = res["response"][0]["league"]["standings"][0]
+        res = requests.get(url, headers=HEADERS, timeout=8)
+        res.raise_for_status()
+        data = res.json()
+        
+        if data.get("errors"):
+            st.error(f"Error de API (Fuerzas): {data['errors']}")
+            return {}, {}
+            
+        if not data.get("response"): return {}, {}
+        
+        standings = data["response"][0]["league"]["standings"][0]
         pj_totales = sum(t["all"]["played"] for t in standings) / 2
         if pj_totales == 0: return {}, {}
         
-        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / sum(t["home"]["played"] for t in standings))
-        avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / sum(t["away"]["played"] for t in standings))
+        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / max(1, sum(t["home"]["played"] for t in standings)))
+        avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / max(1, sum(t["away"]["played"] for t in standings)))
         
         stats_eq = {}
         
         for t in standings:
-            nom = limpiar_nombre(t["team"]["name"])
+            team_id = t["team"]["id"]
             mom = calcular_momentum_sigmoideo(t.get("form", ""))
             
             hl_pj, hl_gf, hl_gc = t["home"]["played"], t["home"]["goals"]["for"], t["home"]["goals"]["against"]
             aw_pj, aw_gf, aw_gc = t["away"]["played"], t["away"]["goals"]["for"], t["away"]["goals"]["against"]
             
-            K = max(1.0, 10.0 - (hl_pj * 0.5)) 
+            K = max(2.0, 15.0 - hl_pj) 
             
-            fa_l = (((hl_gf + K * avg_g_loc) / (hl_pj + K)) / avg_g_loc) * mom
-            fd_l = (((hl_gc + K * avg_g_vis) / (hl_pj + K)) / avg_g_vis) / mom
-            fa_v = (((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis) * mom
-            fd_v = (((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc) / mom
+            fa_l_base = ((hl_gf + K * avg_g_loc) / (hl_pj + K)) / avg_g_loc
+            fd_l_base = ((hl_gc + K * avg_g_vis) / (hl_pj + K)) / avg_g_vis
+            fa_v_base = ((aw_gf + K * avg_g_vis) / (aw_pj + K)) / avg_g_vis
+            fd_v_base = ((aw_gc + K * avg_g_loc) / (aw_pj + K)) / avg_g_loc
             
-            stats_eq[nom] = {
-                "FA_H": min(max(fa_l, 0.3), 3.0), 
-                "FD_H": min(max(fd_l, 0.3), 3.0), 
-                "FA_A": min(max(fa_v, 0.3), 3.0), 
-                "FD_A": min(max(fd_v, 0.3), 3.0)
+            stats_eq[team_id] = {
+                "FA_H": min(max(fa_l_base * (0.8 + 0.2 * mom), 0.5), 2.2), 
+                "FD_H": min(max(fd_l_base * (0.8 + 0.2 / mom), 0.5), 2.2), 
+                "FA_A": min(max(fa_v_base * (0.8 + 0.2 * mom), 0.5), 2.2), 
+                "FD_A": min(max(fd_v_base * (0.8 + 0.2 / mom), 0.5), 2.2)
             }
         return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
-    except: return {}, {}
+    except requests.exceptions.RequestException as e:
+        st.error(f"Fallo de conexión al obtener fuerzas: {e}")
+        return {}, {}
+    except Exception as e:
+        st.error(f"Error procesando fuerzas: {e}")
+        return {}, {}
 
 def matriz_dixon_coles_normalizada(xg_l, xg_v):
     xg_tot = xg_l + xg_v
     rho = -0.25 * math.exp(-0.25 * xg_tot) 
     
-    matriz = np.zeros((10, 10))
-    for g_l in range(10):
-        for g_v in range(10):
+    matriz = np.zeros((12, 12))
+    for g_l in range(12):
+        for g_v in range(12):
             p_base = poisson.pmf(g_l, xg_l) * poisson.pmf(g_v, xg_v)
             
             adj = 1.0
@@ -228,8 +287,8 @@ def calcular_mercados(xg_l, xg_v):
     p_2 = np.sum(np.triu(matriz, 1))  
     
     p_ov25 = 0.0
-    for g_l in range(10):
-        for g_v in range(10):
+    for g_l in range(12):
+        for g_v in range(12):
             if (g_l + g_v) > 2.5:
                 p_ov25 += matriz[g_l, g_v]
                 
@@ -237,19 +296,23 @@ def calcular_mercados(xg_l, xg_v):
     return {'1': p_1, 'X': p_x, '2': p_2}, p_ov25, p_btts
 
 def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
-    xg_total = xg_l + xg_v
+    xg_total = max(xg_l + xg_v, 0.5)
     desigualdad = abs(prob_1x2['1'] - prob_1x2['2'])
-    tension_real = 1.0 - desigualdad
+    tension_real = max(0.1, 1.0 - desigualdad)
     
-    exp_corners = 8.0 + (xg_total * 0.7) - (desigualdad * 1.5)
-    exp_corners *= ritmo_partido
+    exp_corners = max(5.0, 8.0 + (xg_total * 0.7) - (desigualdad * 1.5))
+    exp_corners *= max(0.8, ritmo_partido)
     
-    v = exp_corners + (0.08 * exp_corners**2) 
-    n = (exp_corners**2) / (v - exp_corners)
-    p_nbinom = exp_corners / v
-    p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom) if exp_corners < v else 0.5
+    v = exp_corners + (0.15 * exp_corners**2)
+    
+    if v <= exp_corners: 
+        p_ov95c = 0.5
+    else:
+        n = (exp_corners**2) / (v - exp_corners)
+        p_nbinom = exp_corners / v
+        p_ov95c = 1.0 - nbinom.cdf(9, n, p_nbinom)
 
-    exp_tarjetas = 3.0 + (tension_real * 2.5) * ritmo_partido
+    exp_tarjetas = max(1.5, 3.0 + (tension_real * 2.5) * ritmo_partido)
     p_ov45t = 1.0 - poisson.cdf(4, exp_tarjetas)
     
     return p_ov95c, p_ov45t
@@ -258,19 +321,34 @@ def calcular_corners_y_tarjetas(xg_l, xg_v, prob_1x2, ritmo_partido):
 def cargar_datos_jornada(fecha):
     url = f"https://v3.football.api-sports.io/fixtures?date={fecha}&timezone=Europe/Madrid"
     try:
-        res = requests.get(url, headers=HEADERS).json()
-        return [p for p in res.get("response", []) if p["league"]["id"] in LIGAS_IDS_ACTIVAS]
-    except: return []
+        res = requests.get(url, headers=HEADERS, timeout=8)
+        res.raise_for_status()
+        data = res.json()
+        if data.get("errors"):
+            st.error(f"Error de API (Partidos): {data['errors']}")
+            return []
+        return [p for p in data.get("response", []) if p["league"]["id"] in LIGAS_IDS_ACTIVAS]
+    except requests.exceptions.RequestException as e:
+        st.error(f"Fallo de conexión al cargar jornada: {e}")
+        return []
 
 @st.cache_data(ttl=1800)
 def cargar_proxima_jornada_liga(league_id):
     url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&next=10&timezone=Europe/Madrid"
     try:
-        return requests.get(url, headers=HEADERS).json().get("response", [])
-    except: return []
+        res = requests.get(url, headers=HEADERS, timeout=8)
+        res.raise_for_status()
+        data = res.json()
+        if data.get("errors"):
+            st.error(f"Error de API (Próx Jornada): {data['errors']}")
+            return []
+        return data.get("response", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"Fallo de conexión al cargar liga: {e}")
+        return []
 
 # ---------------------------------------------------------
-# 3. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
+# 4. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
 # ---------------------------------------------------------
 modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas"])
 
@@ -283,24 +361,9 @@ id_liga_explorador = PAISES_LIGAS[pais_sel][liga_sel]
 if modo_vista == "1️⃣ Escáner General (Jornada)":
     st.title("🤖 Escáner Cuantitativo & Extractor Data")
     
-    # --- GENERADOR DINÁMICO DE FECHAS (4 DÍAS) ---
-    dias_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-    hoy = datetime.now()
-    opciones_dias = {}
-    
-    for i in range(4):
-        fecha_iter = hoy + timedelta(days=i)
-        dia_str = dias_es[fecha_iter.weekday()]
-        num_dia = fecha_iter.day
-        
-        if i == 0: nombre_opcion = f"Hoy {dia_str} {num_dia}"
-        elif i == 1: nombre_opcion = f"Mañana {dia_str} {num_dia}"
-        else: nombre_opcion = f"{dia_str.capitalize()} {num_dia}"
-        
-        opciones_dias[nombre_opcion] = i
-    
+    dias = {"Hoy": 0, "Mañana": 1, "Pasado": 2}
     c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
-    dia_sel = c_dia.selectbox("Día", list(opciones_dias.keys()))
+    dia_sel = c_dia.selectbox("Día", list(dias.keys()))
     
     max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 5, 30, 15)
     
@@ -312,7 +375,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         "📊 Alta Probabilidad (>65%)"
     ], on_change=reset_pagina)
     
-    fecha_calc = (datetime.now() + timedelta(days=opciones_dias[dia_sel])).strftime("%Y-%m-%d")
+    fecha_calc = (datetime.now() + timedelta(days=dias[dia_sel])).strftime("%Y-%m-%d")
     
     if 'raw_picks' not in st.session_state: st.session_state.raw_picks = None
     if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 1
@@ -320,12 +383,16 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
     if c_btn.button("🔄 Ejecutar Escáner"):
         st.session_state.pagina_actual = 1 
         partidos = cargar_datos_jornada(fecha_calc)
+        
         if not partidos:
-            st.info("No hay partidos programados en las ligas configuradas para este día.")
+            st.info("No hay partidos programados o hubo un error de conexión.")
             st.session_state.raw_picks = [] 
         else:
             ligas_activas = list(set([p["league"]["id"] for p in partidos]))
             stats_liga, medias_liga = {}, {}
+            
+            with st.spinner(f"Descargando cuotas masivas de la jornada..."):
+                cuotas_dia = obtener_cuotas_jornada(fecha_calc)
             
             with st.spinner(f"Evaluando {len(partidos)} partidos..."):
                 for lid in ligas_activas:
@@ -338,7 +405,9 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
             for i, p in enumerate(partidos):
                 f_id = p["fixture"]["id"]
                 lid = p["league"]["id"]
-                loc, vis = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
+                
+                loc_name, vis_name = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
+                loc_id, vis_id = p["teams"]["home"]["id"], p["teams"]["away"]["id"]
                 
                 liga_nombre = p["league"]["name"]
                 pais_nombre = p["league"]["country"]
@@ -349,8 +418,8 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 except:
                     fecha_hora_str = p["fixture"]["date"]
                 
-                sl = stats_liga.get(lid, {}).get(limpiar_nombre(loc), {"FA_H": 1.0, "FD_H": 1.0})
-                sv = stats_liga.get(lid, {}).get(limpiar_nombre(vis), {"FA_A": 1.0, "FD_A": 1.0})
+                sl = stats_liga.get(lid, {}).get(loc_id, {"FA_H": 1.0, "FD_H": 1.0})
+                sv = stats_liga.get(lid, {}).get(vis_id, {"FA_A": 1.0, "FD_A": 1.0})
                 ritmo_partido = 1.0 + ((sl["FA_H"] + sv["FA_A"] - 2.0) * 0.15)
                 
                 xG_loc_raw = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5) * ritmo_partido
@@ -362,12 +431,13 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 prob_1x2, p_ov25, p_btts = calcular_mercados(xG_loc, xG_vis)
                 p_ov95c, p_ov45t = calcular_corners_y_tarjetas(xG_loc, xG_vis, prob_1x2, ritmo_partido)
                 
-                cuotas = obtener_cuotas_partido(f_id)
+                cuotas = cuotas_dia.get(f_id, {})
                 
                 cuotas_desviggadas = desviggar_cuotas_shin_aproximado(cuotas, ["1", "X", "2"])
                 prob_real_o25 = desviggar_2way(cuotas.get("O25"), cuotas.get("U25"))
                 prob_real_btts = desviggar_2way(cuotas.get("BTTS_Y"), cuotas.get("BTTS_N"))
                 prob_real_o95c = desviggar_2way(cuotas.get("O95C"), cuotas.get("U95C"))
+                prob_real_o45t = desviggar_2way(cuotas.get("O45T"), cuotas.get("U45T"))
                 
                 mercados = [
                     ("Local (1)", prob_1x2['1'], cuotas.get("1", 0), cuotas_desviggadas.get("TrueProb_1", 0)),
@@ -376,7 +446,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     ("Over 2.5 Goles", p_ov25, cuotas.get("O25", 0), prob_real_o25),
                     ("Ambos Marcan (Sí)", p_btts, cuotas.get("BTTS_Y", 0), prob_real_btts),
                     ("Over 9.5 Córners", p_ov95c, cuotas.get("O95C", 0), prob_real_o95c),
-                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), 0) 
+                    ("Over 4.5 Tarjetas", p_ov45t, cuotas.get("O45T", 0), prob_real_o45t) 
                 ]
 
                 for n_merc, p_real, cuota, p_real_casa in mercados:
@@ -393,14 +463,10 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                         tiene_valor = (ev > 0.025 and ev_valido)
                         
                         if tiene_valor or (p_real >= 0.65 and ev_valido):
-                            # Añadimos variables métricas al diccionario para el prompt IA
                             raw_picks_temp.append({
-                                "f_id": f_id, "Partido": f"{loc} vs {vis}", "Mercado": n_merc,
+                                "f_id": f_id, "Partido": f"{loc_name} vs {vis_name}", "Mercado": n_merc,
                                 "Prob": p_real, "Cuota": cuota, "EV": ev, "Tiene_Valor": tiene_valor,
-                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str,
-                                "xG_loc": xG_loc, "xG_vis": xG_vis, 
-                                "FA_H": sl["FA_H"], "FD_H": sl["FD_H"],
-                                "FA_A": sv["FA_A"], "FD_A": sv["FD_A"]
+                                "Liga": liga_nombre, "Pais": pais_nombre, "Fecha_Hora": fecha_hora_str
                             })
                 bar.progress((i+1)/len(partidos))
             bar.empty()
@@ -423,21 +489,21 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
             for p in picks_pre_filtrados:
-                factor_castigo = 1.0 + (0.05 * (p["Cuota"] - 1.0))
+                factor_castigo = 1.0 + (0.08 * (p["Cuota"] - 1.0))
                 prob_conservadora = p["Prob"] / factor_castigo
                 ev_ajustado = (prob_conservadora * p["Cuota"]) - 1.0
                 
                 if ev_ajustado > 0:
                     b = p["Cuota"] - 1.0
                     full_kelly = ev_ajustado / b
-                    multiplicador_dinamico = 0.10 / math.sqrt(p["Cuota"])
-                    multiplicador_dinamico = min(multiplicador_dinamico, 0.10)
+                    multiplicador_dinamico = 0.05 / math.sqrt(p["Cuota"])
+                    multiplicador_dinamico = min(multiplicador_dinamico, 0.05)
                     kelly_fraccional = full_kelly * multiplicador_dinamico 
                     p["Stake_Pct_Ideal"] = kelly_fraccional * 100
                 else:
                     p["Stake_Pct_Ideal"] = 0.0
 
-            picks_pre_filtrados = [p for p in picks_pre_filtrados if p["Stake_Pct_Ideal"] > 0]
+            picks_pre_filtrados = [p for p in picks_pre_filtrados if p["Stake_Pct_Ideal"] > 0.1]
             picks_pre_filtrados.sort(key=lambda x: x["Stake_Pct_Ideal"], reverse=True)
 
             exposicion_acumulada = 0.0
@@ -452,7 +518,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     else:
                         break
                 
-                stake_1_10 = int(round(stake_pct / 0.25))
+                stake_1_10 = int(math.ceil((stake_pct / 2.5) * 10))
                 stake_1_10 = max(1, min(10, stake_1_10))
                 
                 if stake_1_10 >= 1:
@@ -490,28 +556,44 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 fin_idx = inicio_idx + ITEMS_POR_PAGINA
                 picks_pagina = picks_ordenados[inicio_idx:fin_idx]
                 
+                picks_historicos = obtener_picks_historicos()
+                if 'picks_registrados' not in st.session_state: st.session_state.picks_registrados = set()
+                
+                def registrar_accion(f_id, mercado, key_interna):
+                    guardar_pick(f_id, mercado)
+                    st.session_state.picks_registrados.add(key_interna)
+
                 for idx, pick in enumerate(picks_pagina, start=inicio_idx+1):
                     with st.container():
-                        # UI Limpia (eliminado el botón de guardar y ajustados los anchos)
-                        cc1, cc2, cc3, cc4 = st.columns([3.5, 2.5, 2, 2])
+                        cc1, cc2, cc3, cc4, cc5 = st.columns([3, 2, 1.5, 2, 1.5])
                         cc1.write(f"⚽ **{pick['Partido']}**")
                         cc2.write(f"🎯 **{pick['Mercado']}** (Cuota: {pick['Cuota']})")
                         cc3.write(f"📊 Prob: **{pick['Prob']*100:.1f}%**")
-                        cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10**")
                         
-                        # Generador automático del Prompt Experto (Cero IA/Matemáticas)
-                        with st.expander("📊 Generar Argumento Experto para Telegram (Copiar a IA)"):
-                            datos_crudos = f"""Analiza estos datos y dame 1 o 2 frases humanas y expertas justificando la apuesta. RECUERDA: No menciones EV, ni algoritmos, ni probabilidades exactas. Traduce los números a momento de forma y peligro ofensivo/defensivo.
+                        pick_key_ui = f"{pick['f_id']}_{pick['Mercado']}_{idx}"
+                        pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
+                        ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
 
-**Partido:** {pick['Partido']}
-**Competición:** {pick['Liga']} ({pick['Pais']})
-**Mercado a apostar:** {pick['Mercado']} a cuota {pick['Cuota']}
-
-**Datos para tu análisis mental (no los menciones literalmente):**
-- Goles Esperados (xG): Local {pick['xG_loc']:.2f} | Visitante {pick['xG_vis']:.2f}
-- Fuerza Ofensiva Local (FA_H): {pick['FA_H']:.2f} | Defensa Local (FD_H): {pick['FD_H']:.2f}
-- Fuerza Ofensiva Vis (FA_A): {pick['FA_A']:.2f} | Defensa Vis (FD_A): {pick['FD_A']:.2f}
-*(Nota: Valores de Fuerza > 1.0 indican mejor rendimiento que la media)*"""
+                        cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10**")
+                            
+                        if ya_registrado:
+                            cc5.button("✅ Guardado", key=f"btn_{pick_key_ui}", disabled=True)
+                        else:
+                            cc5.button("Registrar Pick", key=f"btn_{pick_key_ui}", 
+                                       on_click=registrar_accion, 
+                                       args=(pick['f_id'], pick['Mercado'], pick_key_ui))
+                        
+                        with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
+                            datos_crudos = f"""**DATOS DEL PARTIDO**
+- **Partido:** {pick['Partido']}
+- **Competición:** {pick['Liga']} ({pick['Pais']})
+- **Horario:** {pick['Fecha_Hora']}
+- **Mercado Recomendado:** {pick['Mercado']}
+- **Cuota Casa de Apuestas:** {pick['Cuota']}
+- **Stake Recomendado:** {pick['Stake_1_10']}/10
+- **Probabilidad Real (Modelo):** {pick['Prob']*100:.1f}%
+- **Valor Esperado (EV+):** {pick['EV']*100:.1f}%
+"""
                             st.code(datos_crudos, language="markdown")
                         st.divider()
             else:
@@ -527,14 +609,17 @@ elif modo_vista == "2️⃣ Explorador de Ligas":
         stats, medias = obtener_fuerzas_liga(id_liga_explorador)
         tabla_liga = []
         for p in prox_partidos:
-            loc, vis = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
-            sl = stats.get(limpiar_nombre(loc), {"FA_H": 1.0, "FD_H": 1.0})
-            sv = stats.get(limpiar_nombre(vis), {"FA_A": 1.0, "FD_A": 1.0})
+            loc_name, vis_name = p["teams"]["home"]["name"], p["teams"]["away"]["name"]
+            loc_id, vis_id = p["teams"]["home"]["id"], p["teams"]["away"]["id"]
+            
+            sl = stats.get(loc_id, {"FA_H": 1.0, "FD_H": 1.0})
+            sv = stats.get(vis_id, {"FA_A": 1.0, "FD_A": 1.0})
             xG_l = sl["FA_H"] * sv["FD_A"] * medias.get("avg_home", 1.5)
             xG_v = sv["FA_A"] * sl["FD_H"] * medias.get("avg_away", 1.2)
+            
             probs, _, _ = calcular_mercados(xG_l, xG_v)
             tabla_liga.append({
-                "Fecha": p["fixture"]["date"][:10], "Local": loc, "Visitante": vis,
+                "Fecha": p["fixture"]["date"][:10], "Local": loc_name, "Visitante": vis_name,
                 "% Gana Local": f"{probs['1']*100:.1f}%", "% Empate": f"{probs['X']*100:.1f}%", "% Gana Vis": f"{probs['2']*100:.1f}%"
             })
         st.dataframe(pd.DataFrame(tabla_liga), use_container_width=True)
