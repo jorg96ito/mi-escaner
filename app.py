@@ -223,20 +223,29 @@ def obtener_fuerzas_liga(league_id):
         if not data.get("response"): return {}, {}
         
         standings = data["response"][0]["league"]["standings"][0]
-        pj_totales = sum(t["all"]["played"] for t in standings) / 2
+        
+        # SANEAMIENTO: (t["all"]["played"] or 0) evita cuelgues si la API devuelve null
+        pj_totales = sum((t["all"]["played"] or 0) for t in standings) / 2
         if pj_totales == 0: return {}, {}
         
-        avg_g_loc = max(0.1, sum(t["home"]["goals"]["for"] for t in standings) / max(1, sum(t["home"]["played"] for t in standings)))
-        avg_g_vis = max(0.1, sum(t["away"]["goals"]["for"] for t in standings) / max(1, sum(t["away"]["played"] for t in standings)))
+        # SANEAMIENTO: Aplicado a los cálculos de las medias globales de la liga
+        avg_g_loc = max(0.1, sum((t["home"]["goals"]["for"] or 0) for t in standings) / max(1, sum((t["home"]["played"] or 0) for t in standings)))
+        avg_g_vis = max(0.1, sum((t["away"]["goals"]["for"] or 0) for t in standings) / max(1, sum((t["away"]["played"] or 0) for t in standings)))
         
         stats_eq = {}
         
         for t in standings:
             team_id = t["team"]["id"]
-            mom = calcular_momentum_sigmoideo(t.get("form", ""))
+            mom = calcular_momentum_sigmoideo(t.get("form") or "")
             
-            hl_pj, hl_gf, hl_gc = t["home"]["played"], t["home"]["goals"]["for"], t["home"]["goals"]["against"]
-            aw_pj, aw_gf, aw_gc = t["away"]["played"], t["away"]["goals"]["for"], t["away"]["goals"]["against"]
+            # SANEAMIENTO: Aplicado a las estadísticas individuales de cada equipo
+            hl_pj = t["home"]["played"] or 0
+            hl_gf = t["home"]["goals"]["for"] or 0
+            hl_gc = t["home"]["goals"]["against"] or 0
+            
+            aw_pj = t["away"]["played"] or 0
+            aw_gf = t["away"]["goals"]["for"] or 0
+            aw_gc = t["away"]["goals"]["against"] or 0
             
             K = max(2.0, 15.0 - hl_pj) 
             
