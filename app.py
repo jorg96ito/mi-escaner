@@ -9,7 +9,7 @@ import math
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.5 | Deep Leagues & Smart Dates", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.6 | Edge Validation & Log-Kelly", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -110,52 +110,68 @@ def desviggar_2way(cuota_fav, cuota_underdog):
 
 @st.cache_data(ttl=600)
 def obtener_cuotas_jornada(fecha):
-    url = f"https://v3.football.api-sports.io/odds?date={fecha}&bookmaker=8"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        res.raise_for_status()
-        data = res.json()
+    cuotas_globales = {}
+    pagina_actual = 1
+    total_paginas = 1
+    
+    progress_text = st.empty()
+    
+    while pagina_actual <= total_paginas:
+        progress_text.text(f"Descargando cuotas: Página {pagina_actual} de {total_paginas}...")
+        url = f"https://v3.football.api-sports.io/odds?date={fecha}&bookmaker=8&page={pagina_actual}"
         
-        if data.get("errors"):
-            st.error(f"Error de API (Cuotas): {data['errors']}")
-            return {}
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            res.raise_for_status()
+            data = res.json()
             
-        cuotas_globales = {}
-        if data.get("response"):
-            for match in data["response"]:
-                fid = match["fixture"]["id"]
-                cuotas = {}
-                for bookmaker in match.get("bookmakers", []):
-                    for market in bookmaker.get("bets", []):
-                        if market["name"] == "Match Winner":
-                            for val in market["values"]:
-                                if val["value"] == "Home": cuotas["1"] = float(val["odd"])
-                                elif val["value"] == "Draw": cuotas["X"] = float(val["odd"])
-                                elif val["value"] == "Away": cuotas["2"] = float(val["odd"])
-                        elif market["name"] == "Goals Over/Under":
-                            for val in market["values"]:
-                                if val["value"] == "Over 2.5": cuotas["O25"] = float(val["odd"])
-                                elif val["value"] == "Under 2.5": cuotas["U25"] = float(val["odd"])
-                        elif market["name"] == "Both Teams Score":
-                            for val in market["values"]:
-                                if val["value"] == "Yes": cuotas["BTTS_Y"] = float(val["odd"])
-                                elif val["value"] == "No": cuotas["BTTS_N"] = float(val["odd"])
-                        elif "Corners" in market["name"]:
-                            for val in market["values"]:
-                                if "Over 9.5" in str(val["value"]): cuotas["O95C"] = float(val["odd"])
-                                if "Under 9.5" in str(val["value"]): cuotas["U95C"] = float(val["odd"])
-                        elif "Cards" in market["name"] or "Tarjetas" in market["name"]:
-                            for val in market["values"]:
-                                if "Over 4.5" in str(val["value"]): cuotas["O45T"] = float(val["odd"])
-                                if "Under 4.5" in str(val["value"]): cuotas["U45T"] = float(val["odd"])
-                cuotas_globales[fid] = cuotas
-        return cuotas_globales
-    except requests.exceptions.RequestException as e:
-        st.error(f"Fallo de conexión al obtener cuotas: {e}")
-        return {}
-    except Exception as e:
-        st.error(f"Error procesando cuotas: {e}")
-        return {}
+            if data.get("errors"):
+                st.error(f"Error de API (Cuotas Pág {pagina_actual}): {data['errors']}")
+                break
+                
+            if pagina_actual == 1:
+                total_paginas = data.get("paging", {}).get("total", 1)
+                
+            if data.get("response"):
+                for match in data["response"]:
+                    fid = match["fixture"]["id"]
+                    cuotas = {}
+                    for bookmaker in match.get("bookmakers", []):
+                        for market in bookmaker.get("bets", []):
+                            if market["name"] == "Match Winner":
+                                for val in market["values"]:
+                                    if val["value"] == "Home": cuotas["1"] = float(val["odd"])
+                                    elif val["value"] == "Draw": cuotas["X"] = float(val["odd"])
+                                    elif val["value"] == "Away": cuotas["2"] = float(val["odd"])
+                            elif market["name"] == "Goals Over/Under":
+                                for val in market["values"]:
+                                    if val["value"] == "Over 2.5": cuotas["O25"] = float(val["odd"])
+                                    elif val["value"] == "Under 2.5": cuotas["U25"] = float(val["odd"])
+                            elif market["name"] == "Both Teams Score":
+                                for val in market["values"]:
+                                    if val["value"] == "Yes": cuotas["BTTS_Y"] = float(val["odd"])
+                                    elif val["value"] == "No": cuotas["BTTS_N"] = float(val["odd"])
+                            elif "Corners" in market["name"]:
+                                for val in market["values"]:
+                                    if "Over 9.5" in str(val["value"]): cuotas["O95C"] = float(val["odd"])
+                                    if "Under 9.5" in str(val["value"]): cuotas["U95C"] = float(val["odd"])
+                            elif "Cards" in market["name"] or "Tarjetas" in market["name"]:
+                                for val in market["values"]:
+                                    if "Over 4.5" in str(val["value"]): cuotas["O45T"] = float(val["odd"])
+                                    if "Under 4.5" in str(val["value"]): cuotas["U45T"] = float(val["odd"])
+                    cuotas_globales[fid] = cuotas
+            
+            pagina_actual += 1
+            
+        except requests.exceptions.RequestException as e:
+            st.error(f"Fallo de conexión al obtener cuotas en página {pagina_actual}: {e}")
+            break
+        except Exception as e:
+            st.error(f"Error procesando cuotas: {e}")
+            break
+            
+    progress_text.empty()
+    return cuotas_globales
 
 @st.cache_data(ttl=3600)
 def obtener_fuerzas_liga(league_id):
@@ -214,7 +230,9 @@ def obtener_fuerzas_liga(league_id):
 
 def matriz_dixon_coles_normalizada(xg_l, xg_v):
     xg_tot = xg_l + xg_v
-    rho = -0.25 * math.exp(-0.25 * xg_tot) 
+    
+    rho_raw = -0.25 * math.exp(-0.25 * xg_tot)
+    rho = max(rho_raw, -1.0 / max(xg_l, xg_v, 0.1)) 
     
     matriz = np.zeros((12, 12))
     for g_l in range(12):
@@ -314,7 +332,6 @@ id_liga_explorador = PAISES_LIGAS[pais_sel][liga_sel]
 if modo_vista == "1️⃣ Escáner General (Jornada)":
     st.title("🤖 Escáner Cuantitativo & Extractor Data")
     
-    # --- GENERADOR DINÁMICO DE DÍAS (4 Días de Horizonte) ---
     dias_esp = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     dias_dict = {}
     hoy = datetime.now()
@@ -332,11 +349,9 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
             label = f"{nombre_dia} {num_dia}"
             
         dias_dict[label] = i
-    # --------------------------------------------------------
 
     c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
     
-    # Asignamos el diccionario dinámico al selector
     dia_sel = c_dia.selectbox("Día", list(dias_dict.keys()))
     
     max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 5, 30, 15)
@@ -349,7 +364,6 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         "📊 Alta Probabilidad (>65%)"
     ], on_change=reset_pagina)
     
-    # Recuperamos el valor (0, 1, 2, 3) del día seleccionado para la API
     fecha_calc = (datetime.now() + timedelta(days=dias_dict[dia_sel])).strftime("%Y-%m-%d")
     
     if 'raw_picks' not in st.session_state: st.session_state.raw_picks = None
@@ -395,13 +409,14 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 
                 sl = stats_liga.get(lid, {}).get(loc_id, {"FA_H": 1.0, "FD_H": 1.0})
                 sv = stats_liga.get(lid, {}).get(vis_id, {"FA_A": 1.0, "FD_A": 1.0})
-                ritmo_partido = 1.0 + ((sl["FA_H"] + sv["FA_A"] - 2.0) * 0.15)
                 
-                xG_loc_raw = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5) * ritmo_partido
-                xG_vis_raw = sv["FA_A"] * sl["FD_H"] * medias_liga.get(lid, {}).get("avg_away", 1.2) * ritmo_partido
+                xG_loc_raw = sl["FA_H"] * sv["FD_A"] * medias_liga.get(lid, {}).get("avg_home", 1.5)
+                xG_vis_raw = sv["FA_A"] * sl["FD_H"] * medias_liga.get(lid, {}).get("avg_away", 1.2)
                 
-                xG_loc = min(xG_loc_raw, 3.5)
-                xG_vis = min(xG_vis_raw, 3.5)
+                xG_loc = min(max(xG_loc_raw, 0.1), 3.5) 
+                xG_vis = min(max(xG_vis_raw, 0.1), 3.5)
+                
+                ritmo_partido = 1.0 + ((sl["FA_H"] + sv["FA_A"] - 2.0) * 0.10) 
                 
                 prob_1x2, p_ov25, p_btts = calcular_mercados(xG_loc, xG_vis)
                 p_ov95c, p_ov45t = calcular_corners_y_tarjetas(xG_loc, xG_vis, prob_1x2, ritmo_partido)
@@ -429,10 +444,12 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                         ev = (p_real * cuota) - 1
                         ev_valido = True
                         
-                        if p_real_casa > 0 and (p_real - p_real_casa) < 0.005:
-                            ev_valido = False
-                            
-                        if ev > 0.45:
+                        if p_real_casa > 0:
+                            ventaja_relativa = (p_real / p_real_casa) - 1.0
+                            if ventaja_relativa < 0.03:
+                                ev_valido = False
+                        
+                        if ev > 0.40:
                             ev_valido = False
                             
                         tiene_valor = (ev > 0.025 and ev_valido)
@@ -464,17 +481,17 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                     if p["Prob"] >= 0.65: picks_pre_filtrados.append(p)
 
             for p in picks_pre_filtrados:
-                factor_castigo = 1.0 + (0.08 * (p["Cuota"] - 1.0))
-                prob_conservadora = p["Prob"] / factor_castigo
+                exponente_castigo = 1.0 + (0.04 * math.log(max(1.01, p["Cuota"])))
+                prob_conservadora = p["Prob"] ** exponente_castigo
+                
                 ev_ajustado = (prob_conservadora * p["Cuota"]) - 1.0
                 
                 if ev_ajustado > 0:
                     b = p["Cuota"] - 1.0
                     full_kelly = ev_ajustado / b
-                    multiplicador_dinamico = 0.05 / math.sqrt(p["Cuota"])
-                    multiplicador_dinamico = min(multiplicador_dinamico, 0.05)
-                    kelly_fraccional = full_kelly * multiplicador_dinamico 
-                    p["Stake_Pct_Ideal"] = kelly_fraccional * 100
+                    
+                    multiplicador_dinamico = min(0.06 / math.sqrt(p["Cuota"]), 0.06)
+                    p["Stake_Pct_Ideal"] = full_kelly * multiplicador_dinamico * 100
                 else:
                     p["Stake_Pct_Ideal"] = 0.0
 
