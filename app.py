@@ -9,7 +9,7 @@ import math
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.4 | Deep Leagues Only", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.5 | Deep Leagues & Smart Dates", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
@@ -314,9 +314,30 @@ id_liga_explorador = PAISES_LIGAS[pais_sel][liga_sel]
 if modo_vista == "1️⃣ Escáner General (Jornada)":
     st.title("🤖 Escáner Cuantitativo & Extractor Data")
     
-    dias = {"Hoy": 0, "Mañana": 1, "Pasado": 2}
+    # --- GENERADOR DINÁMICO DE DÍAS (4 Días de Horizonte) ---
+    dias_esp = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    dias_dict = {}
+    hoy = datetime.now()
+    
+    for i in range(4):
+        fecha_iter = hoy + timedelta(days=i)
+        nombre_dia = dias_esp[fecha_iter.weekday()]
+        num_dia = fecha_iter.day
+        
+        if i == 0:
+            label = f"Hoy {nombre_dia} {num_dia}"
+        elif i == 1:
+            label = f"Mañana {nombre_dia} {num_dia}"
+        else:
+            label = f"{nombre_dia} {num_dia}"
+            
+        dias_dict[label] = i
+    # --------------------------------------------------------
+
     c_dia, c_riesgo, c_orden, c_btn = st.columns([1, 1.2, 1.5, 1])
-    dia_sel = c_dia.selectbox("Día", list(dias.keys()))
+    
+    # Asignamos el diccionario dinámico al selector
+    dia_sel = c_dia.selectbox("Día", list(dias_dict.keys()))
     
     max_exposure = c_riesgo.slider("Riesgo Máx Carter(%)", 5, 30, 15)
     
@@ -328,7 +349,8 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         "📊 Alta Probabilidad (>65%)"
     ], on_change=reset_pagina)
     
-    fecha_calc = (datetime.now() + timedelta(days=dias[dia_sel])).strftime("%Y-%m-%d")
+    # Recuperamos el valor (0, 1, 2, 3) del día seleccionado para la API
+    fecha_calc = (datetime.now() + timedelta(days=dias_dict[dia_sel])).strftime("%Y-%m-%d")
     
     if 'raw_picks' not in st.session_state: st.session_state.raw_picks = None
     if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 1
