@@ -5,111 +5,61 @@ from scipy.stats import poisson, nbinom
 from datetime import datetime, timedelta
 import pandas as pd
 import math
-import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN E INFRAESTRUCTURA
 # ---------------------------------------------------------
-st.set_page_config(page_title="Quant Pro V19.2 | API Optimization & Math Shield", layout="wide")
+st.set_page_config(page_title="Quant Pro V19.4 | Deep Leagues Only", layout="wide")
 
 API_KEY_FOOTBALL = "08edd9f31ef5d32739e7d7acb5740f57"  
 HEADERS = {'x-apisports-key': API_KEY_FOOTBALL}
 ITEMS_POR_PAGINA = 10
 
+# 🌍 DICCIONARIO PROFUNDO DE LIGAS (Cero Copas. Solo Ligas Regulares hasta 4ª/5ª división)
 PAISES_LIGAS = {
-    "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43},
-    "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Liga Femenina": 142},
-    "Italia": {"Serie A": 135, "Serie B": 136, "Serie C": 137},
-    "Alemania": {"1. Bundesliga": 78, "2. Bundesliga": 79, "3. Liga": 80, "Reg. Nord": 81, "Reg. Nordost": 82, "Reg. West": 83, "Reg. Südwest": 84, "Reg. Bayern": 85},
-    "Francia": {"Ligue 1": 61, "Ligue 2": 62, "National": 63},
-    "Paises Bajos": {"Eredivisie": 88, "Eerste Divisie": 89},
-    "Portugal": {"Primeira Liga": 94, "Liga Portugal 2": 95},
-    "Bélgica": {"Jupiler Pro League": 144, "Challenger Pro": 145},
-    "Escocia": {"Premiership": 179, "Championship": 180},
-    "Turquía": {"Süper Lig": 203, "1. Lig": 204},
-    "Grecia": {"Super League 1": 197},
-    "Suiza": {"Super League": 207, "Challenge League": 208},
-    "Austria": {"Bundesliga": 218, "2. Liga": 219},
-    "Dinamarca": {"Superliga": 119, "1st Division": 120},
-    "Suecia": {"Allsvenskan": 113, "Superettan": 114},
-    "Noruega": {"Eliteserien": 103, "Obos-Ligaen": 104},
-    "Finlandia": {"Veikkausliiga": 129, "Ykkönen": 130},
-    "Polonia": {"Ekstraklasa": 106, "I Liga": 107},
-    "Rumanía": {"Liga I": 283},
-    "Croacia": {"HNL": 210},
-    "Serbia": {"Super Liga": 288},
-    "República Checa": {"First League": 345},
-    "Hungría": {"NB I": 271},
-    "Bulgaria": {"First League": 172},
-    "Eslovaquia": {"Super Liga": 332},
-    "Eslovenia": {"PrvaLiga": 373},
+    "Inglaterra": {"Premier League": 39, "Championship": 40, "League One": 41, "League Two": 42, "National League": 43, "National League North": 44, "National League South": 45, "Non League Premier": 46},
+    "España": {"LaLiga": 140, "LaLiga 2": 141, "Primera RFEF": 435, "Segunda RFEF": 436, "Tercera RFEF": 437, "Liga Femenina": 142},
+    "Italia": {"Serie A": 135, "Serie B": 136, "Serie C": 137, "Serie D": 138, "Campionato Primavera 1": 139},
+    "Alemania": {"1. Bundesliga": 78, "2. Bundesliga": 79, "3. Liga": 80, "Reg. Nord": 81, "Reg. Nordost": 82, "Reg. West": 83, "Reg. Südwest": 84, "Reg. Bayern": 85, "Oberliga NOFV-Nord": 92, "Oberliga NOFV-Süd": 93, "Oberliga Westfalen": 94, "Oberliga Baden-Württemberg": 86},
+    "Francia": {"Ligue 1": 61, "Ligue 2": 62, "National 1": 63, "National 2": 64, "National 3": 66},
+    "Paises Bajos": {"Eredivisie": 88, "Eerste Divisie": 89, "Tweede Divisie": 90, "Derde Divisie": 91},
+    "Portugal": {"Primeira Liga": 94, "Liga Portugal 2": 95, "Liga 3": 438, "Campeonato de Portugal": 439},
+    "Bélgica": {"Jupiler Pro League": 144, "Challenger Pro": 145, "National Division 1": 146, "Second Amateur Div": 147},
+    "Escocia": {"Premiership": 179, "Championship": 180, "League One": 181, "League Two": 182, "Highland League": 183, "Lowland League": 184},
+    "Turquía": {"Süper Lig": 203, "1. Lig": 204, "2. Lig": 205, "3. Lig": 206},
+    "Grecia": {"Super League 1": 197, "Super League 2": 198},
+    "Suiza": {"Super League": 207, "Challenge League": 208, "Promotion League": 209, "1. Liga Classic": 210},
+    "Austria": {"Bundesliga": 218, "2. Liga": 219, "Regionalliga": 220},
+    "Dinamarca": {"Superliga": 119, "1st Division": 120, "2nd Division": 121, "3rd Division": 122},
+    "Suecia": {"Allsvenskan": 113, "Superettan": 114, "Ettan Norra": 115, "Ettan Södra": 116, "Division 2": 117},
+    "Noruega": {"Eliteserien": 103, "Obos-Ligaen": 104, "PostNord-ligaen": 105, "3. Divisjon": 106},
+    "Finlandia": {"Veikkausliiga": 129, "Ykkösliiga": 130, "Kakkonen": 131},
+    "Polonia": {"Ekstraklasa": 106, "I Liga": 107, "II Liga": 108, "III Liga": 109},
+    "Rumanía": {"Liga I": 283, "Liga II": 284},
+    "Croacia": {"HNL": 210, "1. NL": 211},
+    "Serbia": {"Super Liga": 288, "Prva Liga": 289},
+    "República Checa": {"First League": 345, "FNL": 346},
+    "Hungría": {"NB I": 271, "NB II": 272},
+    "Bulgaria": {"First League": 172, "Second League": 173},
+    "Eslovaquia": {"Super Liga": 332, "2. Liga": 333},
+    "Eslovenia": {"PrvaLiga": 373, "2. SNL": 374},
     "Irlanda": {"Premier Division": 357, "First Division": 358},
-    "Irlanda del Norte": {"Premiership": 184},
-    "Gales": {"Cymru Premier": 192},
-    "Islandia": {"Úrvalsdeild": 118},
-    "Brasil": {"Serie A": 71, "Serie B": 72, "Serie C": 73},
-    "Argentina": {"Liga Profesional": 128, "Primera Nacional": 131},
-    "EEUU": {"MLS": 253, "USL Championship": 255},
-    "México": {"Liga MX": 262, "Liga de Expansión": 263},
-    "Colombia": {"Primera A": 239, "Primera B": 240},
-    "Chile": {"Primera División": 265, "Primera B": 264},
-    "Uruguay": {"Primera División": 268},
-    "Perú": {"Liga 1": 281},
-    "Ecuador": {"Liga Pro": 242},
-    "Paraguay": {"Primera División": 250},
-    "Bolivia": {"Primera División": 236},
-    "Venezuela": {"Primera División": 299},
-    "Honduras": {"Liga Nacional": 259},
-    "El Salvador": {"Primera División": 258},
-    "Costa Rica": {"Primera División": 139},
-    "Japón": {"J1 League": 98, "J2 League": 99, "J3 League": 100},
-    "Corea del Sur": {"K League 1": 292, "K League 2": 293},
-    "China": {"Super League": 169},
-    "Tailandia": {"Thai League 1": 296},
-    "India": {"Super League": 323},
-    "Arabia Saudita": {"Pro League": 307, "Division 1": 308},
-    "Australia": {"A-League": 188},
-    "Sudáfrica": {"Premier League": 288},
-    "Egipto": {"Premier League": 233},
-    "Marruecos": {"Botola Pro": 122},
-    "Irán": {"Pro League": 290}
+    "Irlanda del Norte": {"Premiership": 184, "Championship": 185},
+    "Gales": {"Cymru Premier": 192, "Cymru North": 193, "Cymru South": 194},
+    "Islandia": {"Úrvalsdeild": 118, "1. Deild": 119, "2. Deild": 120},
+    "Brasil": {"Serie A": 71, "Serie B": 72, "Serie C": 73, "Serie D": 74},
+    "Argentina": {"Liga Profesional": 128, "Primera Nacional": 131, "Primera B": 132},
+    "Latinoamérica Sur": {"Chile Primera": 265, "Chile B": 264, "Uruguay Primera": 268, "Paraguay Primera": 250, "Bolivia Primera": 236},
+    "Latinoamérica Norte": {"Liga MX": 262, "Expansión MX": 263, "Colombia A": 239, "Colombia B": 240, "Ecuador Liga Pro": 242, "Perú Liga 1": 281, "Venezuela Primera": 299},
+    "CONCACAF": {"MLS": 253, "USL Championship": 255, "USL League One": 256, "Costa Rica Primera": 139, "Honduras Liga Nacional": 259, "El Salvador Primera": 258},
+    "Asia & Pacífico": {"J1 League": 98, "J2 League": 99, "J3 League": 100, "K League 1": 292, "K League 2": 293, "China Super League": 169, "A-League": 188, "Thai League 1": 296, "India Super League": 323},
+    "Oriente Medio & África": {"Saudi Pro League": 307, "Saudi Div 1": 308, "South Africa Premier": 288, "Egypt Premier": 233, "Morocco Botola": 122, "Iran Pro League": 290}
 }
 
 LIGAS_IDS_ACTIVAS = [id for pais in PAISES_LIGAS.values() for id in pais.values()]
 
 # ---------------------------------------------------------
-# 2. SISTEMA DE TRACKING MINIMALISTA 
-# ---------------------------------------------------------
-TRACKER_FILE = "tracking_apuestas.csv"
-
-def init_tracker():
-    if not os.path.exists(TRACKER_FILE):
-        df = pd.DataFrame(columns=["Fixture_ID", "Mercado"])
-        df.to_csv(TRACKER_FILE, index=False)
-
-def guardar_pick(fixture_id, mercado):
-    df = pd.read_csv(TRACKER_FILE)
-    nuevo = pd.DataFrame([{"Fixture_ID": str(fixture_id), "Mercado": mercado}])
-    df = pd.concat([df, nuevo], ignore_index=True)
-    df.to_csv(TRACKER_FILE, index=False)
-    st.toast("✅ Pick marcado como registrado")
-
-def obtener_picks_historicos():
-    init_tracker()
-    try:
-        df = pd.read_csv(TRACKER_FILE)
-        if df.empty: return set()
-        historico = set()
-        for _, row in df.iterrows():
-            try: fid = str(int(float(row["Fixture_ID"])))
-            except: fid = str(row["Fixture_ID"]).strip()
-            merc = str(row["Mercado"]).strip()
-            historico.add(f"{fid}_{merc}")
-        return historico
-    except: return set()
-
-# ---------------------------------------------------------
-# 3. MOTORES MATEMÁTICOS AFINADOS
+# 2. MOTORES MATEMÁTICOS AFINADOS
 # ---------------------------------------------------------
 
 def calcular_momentum_sigmoideo(form_str):
@@ -217,18 +167,15 @@ def obtener_fuerzas_liga(league_id):
         data = res.json()
         
         if data.get("errors"):
-            st.error(f"Error de API (Fuerzas): {data['errors']}")
             return {}, {}
             
         if not data.get("response"): return {}, {}
         
         standings = data["response"][0]["league"]["standings"][0]
         
-        # SANEAMIENTO: (t["all"]["played"] or 0) evita cuelgues si la API devuelve null
         pj_totales = sum((t["all"]["played"] or 0) for t in standings) / 2
         if pj_totales == 0: return {}, {}
         
-        # SANEAMIENTO: Aplicado a los cálculos de las medias globales de la liga
         avg_g_loc = max(0.1, sum((t["home"]["goals"]["for"] or 0) for t in standings) / max(1, sum((t["home"]["played"] or 0) for t in standings)))
         avg_g_vis = max(0.1, sum((t["away"]["goals"]["for"] or 0) for t in standings) / max(1, sum((t["away"]["played"] or 0) for t in standings)))
         
@@ -238,7 +185,6 @@ def obtener_fuerzas_liga(league_id):
             team_id = t["team"]["id"]
             mom = calcular_momentum_sigmoideo(t.get("form") or "")
             
-            # SANEAMIENTO: Aplicado a las estadísticas individuales de cada equipo
             hl_pj = t["home"]["played"] or 0
             hl_gf = t["home"]["goals"]["for"] or 0
             hl_gc = t["home"]["goals"]["against"] or 0
@@ -262,10 +208,8 @@ def obtener_fuerzas_liga(league_id):
             }
         return stats_eq, {"avg_home": avg_g_loc, "avg_away": avg_g_vis}
     except requests.exceptions.RequestException as e:
-        st.error(f"Fallo de conexión al obtener fuerzas: {e}")
         return {}, {}
     except Exception as e:
-        st.error(f"Error procesando fuerzas: {e}")
         return {}, {}
 
 def matriz_dixon_coles_normalizada(xg_l, xg_v):
@@ -357,13 +301,13 @@ def cargar_proxima_jornada_liga(league_id):
         return []
 
 # ---------------------------------------------------------
-# 4. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
+# 3. INTERFAZ GRÁFICA Y GENERADOR DE DATOS
 # ---------------------------------------------------------
 modo_vista = st.sidebar.radio("Navegación", ["1️⃣ Escáner General (Jornada)", "2️⃣ Explorador de Ligas"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("🌍 Explorador de Ligas")
-pais_sel = st.sidebar.selectbox("País", list(PAISES_LIGAS.keys()))
+pais_sel = st.sidebar.selectbox("País/Región", list(PAISES_LIGAS.keys()))
 liga_sel = st.sidebar.selectbox("Liga", list(PAISES_LIGAS[pais_sel].keys()))
 id_liga_explorador = PAISES_LIGAS[pais_sel][liga_sel]
 
@@ -394,7 +338,7 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
         partidos = cargar_datos_jornada(fecha_calc)
         
         if not partidos:
-            st.info("No hay partidos programados o hubo un error de conexión.")
+            st.info("No hay partidos programados en el radar de ligas o hubo un error de conexión.")
             st.session_state.raw_picks = [] 
         else:
             ligas_activas = list(set([p["league"]["id"] for p in partidos]))
@@ -564,33 +508,14 @@ if modo_vista == "1️⃣ Escáner General (Jornada)":
                 inicio_idx = (st.session_state.pagina_actual - 1) * ITEMS_POR_PAGINA
                 fin_idx = inicio_idx + ITEMS_POR_PAGINA
                 picks_pagina = picks_ordenados[inicio_idx:fin_idx]
-                
-                picks_historicos = obtener_picks_historicos()
-                if 'picks_registrados' not in st.session_state: st.session_state.picks_registrados = set()
-                
-                def registrar_accion(f_id, mercado, key_interna):
-                    guardar_pick(f_id, mercado)
-                    st.session_state.picks_registrados.add(key_interna)
 
                 for idx, pick in enumerate(picks_pagina, start=inicio_idx+1):
                     with st.container():
-                        cc1, cc2, cc3, cc4, cc5 = st.columns([3, 2, 1.5, 2, 1.5])
+                        cc1, cc2, cc3, cc4 = st.columns([3.5, 2.5, 2, 2])
                         cc1.write(f"⚽ **{pick['Partido']}**")
                         cc2.write(f"🎯 **{pick['Mercado']}** (Cuota: {pick['Cuota']})")
                         cc3.write(f"📊 Prob: **{pick['Prob']*100:.1f}%**")
-                        
-                        pick_key_ui = f"{pick['f_id']}_{pick['Mercado']}_{idx}"
-                        pick_id_real = f"{str(pick['f_id']).strip()}_{str(pick['Mercado']).strip()}"
-                        ya_registrado = (pick_id_real in picks_historicos) or (pick_key_ui in st.session_state.picks_registrados)
-
                         cc4.write(f"💰 Stake **{pick['Stake_1_10']}/10**")
-                            
-                        if ya_registrado:
-                            cc5.button("✅ Guardado", key=f"btn_{pick_key_ui}", disabled=True)
-                        else:
-                            cc5.button("Registrar Pick", key=f"btn_{pick_key_ui}", 
-                                       on_click=registrar_accion, 
-                                       args=(pick['f_id'], pick['Mercado'], pick_key_ui))
                         
                         with st.expander("📊 Ver Datos Matemáticos en Crudo (Copiar para IA)"):
                             datos_crudos = f"""**DATOS DEL PARTIDO**
